@@ -66,27 +66,27 @@
       (quit-window nil win))
     (kill-buffer buf)))
 
-(defun hyprland-consult--state ()
-  "Consult state constructor for Hyprland preview.
+(defun hyprland-consult--state (action cand)
+  "Consult state callback for Hyprland preview.
 
-Implements the setup/preview/exit/return lifecycle.
-This intentionally follows Consult's private :state contract."
-  (lambda (action cand)
-    (pcase action
-      ('setup nil)
-      ('preview
-       (if cand
-           (let ((window (get-text-property 0 'hyprland-window cand)))
-             (hyprland-preview-request
-              window
-              (lambda (payload)
-                (hyprland-consult--display-preview payload))))
-         (hyprland-consult--cleanup-preview)))
-      ('exit
-       (hyprland-consult--cleanup-preview))
-      ('return
-       (unless cand
-         (hyprland-consult--cleanup-preview))))))
+ACTION and CAND follow Consult's :state contract.
+This function intentionally handles the direct callback form
+`(state action cand)'."
+  (pcase action
+    ('setup nil)
+    ('preview
+     (if cand
+         (let ((window (get-text-property 0 'hyprland-window cand)))
+           (hyprland-preview-request
+            window
+            (lambda (payload)
+              (hyprland-consult--display-preview payload))))
+       (hyprland-consult--cleanup-preview)))
+    ('exit
+     (hyprland-consult--cleanup-preview))
+    ('return
+     (unless cand
+       (hyprland-consult--cleanup-preview)))))
 
 (defun hyprland--select-window-candidate ()
   "Select a window candidate using Consult when available.
