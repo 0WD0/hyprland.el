@@ -1,0 +1,124 @@
+#+title: hyprland.el
+
+* hyprland.el
+
+~hyprland.el~ brings Hyprland window management into Emacs.
+
+- Snapshot + socket2 sync for Hyprland windows
+- Reconcile policy to keep state converged under noisy events
+- Consult-based window switch with static preview
+- Ibuffer-native workflow via mirrored window buffers
+
+* Status
+
+Current version: ~0.1.0~ (early but usable).
+
+* Requirements
+
+- Emacs 29.1+
+- Hyprland session (with ~HYPRLAND_INSTANCE_SIGNATURE~ in Emacs env)
+- ~hyprctl~ in PATH
+- ~grim~ in PATH (for static preview)
+- [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
+
+* Installation
+
+** Local load-path (quick start)
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/home/_WD_/Dev/hyprland.el")
+(require 'hyprland)
+#+end_src
+
+** Eask dependencies
+
+#+begin_src bash
+eask install-deps
+#+end_src
+
+* Basic usage
+
+#+begin_src emacs-lisp
+(require 'hyprland)
+(hyprland-sync-start)
+#+end_src
+
+Core commands:
+
+- ~M-x hyprland-window-switch~: consult picker + static preview + jump
+- ~M-x hyprland-refresh~: force full snapshot
+- ~M-x hyprland-jump~: focus a window by address
+- ~M-x hyprland-close~: close a window by address
+- ~M-x hyprland-tag~: apply ~+foo/-foo/foo~ tag op
+- ~M-x hyprland-sync-stop~: stop socket/timers
+
+* Ibuffer workflow (recommended)
+
+Enable mirror mode once:
+
+#+begin_src emacs-lisp
+(hyprland-ibuffer-mirror-mode 1)
+#+end_src
+
+Open Hyprland-only ibuffer view:
+
+- ~M-x hyprland-ibuffer-open~
+
+Inside this ibuffer view, existing ibuffer commands are remapped:
+
+- ~RET~, ~f~, ~e~, ~o~, ~M-o~ -> jump to Hyprland window
+- ~k~ -> close marked Hyprland windows (or current row if nothing marked)
+
+No extra custom keybindings are required.
+
+* Customization
+
+Important options:
+
+- ~hyprland-debug~: verbose debug messages
+- ~hyprland-hyprctl-executable~: path to ~hyprctl~
+- ~hyprland-grim-executable~: path to ~grim~
+- ~hyprland-preview-sensitive-regexp~: skip screenshot preview for matching windows
+- ~hyprland-preview-cache-mode~: ~memory-only~ (default) or ~disk~
+- ~hyprland-preview-cache-directory~: cache directory when using disk mode
+
+Reconcile defaults (already tuned):
+
+- debounce: 120ms
+- fast min interval: 400ms
+- fast burst: 6 per 10s
+- periodic full reconcile: 8s
+
+* Troubleshooting
+
+** "Missing XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE"
+
+Your Emacs process does not have Hyprland session env vars.
+This often happens with daemon/service launches.
+
+** Timer error about "Invalid time frequency"
+
+Use latest ~hyprland-reconcile.el~ from this repo. That compatibility issue
+is fixed in current code.
+
+** Consult state arity error
+
+Reload updated package files:
+
+#+begin_src emacs-lisp
+(unload-feature 'hyprland-consult t)
+(unload-feature 'hyprland t)
+(require 'hyprland)
+#+end_src
+
+** Ibuffer commands not remapped
+
+Ensure you opened the special view via ~hyprland-ibuffer-open~ and that
+~hyprland-ibuffer-view-mode~ is enabled in that ibuffer buffer.
+
+* Development
+
+#+begin_src bash
+eask install-deps
+eask test ert test/*.el
+#+end_src

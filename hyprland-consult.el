@@ -17,6 +17,8 @@
 (declare-function consult--read "consult" (candidates &rest options))
 
 (defvar hyprland-consult--preview-buffer-name " *hyprland-preview*")
+(defvar hyprland-consult--candidate-table nil
+  "Hash table from candidate label to Hyprland window object.")
 
 (defun hyprland-consult--window-label (window)
   "Build candidate display label from WINDOW alist."
@@ -31,12 +33,24 @@
     (format "[%s] %s (%s) <%s>" ws-name title class addr)))
 
 (defun hyprland-consult--candidates ()
-  "Build completion candidates with embedded window objects." 
+  "Build completion candidates and a lookup table for window retrieval." 
+  (setq hyprland-consult--candidate-table (make-hash-table :test #'equal))
   (mapcar
    (lambda (window)
-     (propertize (hyprland-consult--window-label window)
-                 'hyprland-window window))
+     (let ((label (hyprland-consult--window-label window)))
+       (puthash label window hyprland-consult--candidate-table)
+       (propertize label 'hyprland-window window)))
    (hyprland-windows)))
+
+(defun hyprland-consult--window-from-candidate (cand)
+  "Resolve candidate CAND back to Hyprland window object.
+
+Consult may strip text properties in some completion stacks, so this
+function also falls back to hash-based label lookup."
+  (or (and (stringp cand) (get-text-property 0 'hyprland-window cand))
+      (and (stringp cand)
+           hyprland-consult--candidate-table
+           (gethash cand hyprland-consult--candidate-table))))
 
 (defun hyprland-consult--display-preview (payload)
   "Display preview PAYLOAD in dedicated side window." 
@@ -50,9 +64,16 @@
       (pcase (plist-get payload :ok)
         ('t
          (let ((bytes (plist-get payload :png-bytes)))
-           (set-buffer-multibyte nil)
-           (insert-image (create-image bytes 'png t :scale 0.45))
-           (insert "\n")))
+           (condition-case err
+               (if (and (display-images-p)
+                        (image-type-available-p 'png))
+                   (progn
+                     (set-buffer-multibyte nil)
+                     (insert-image (create-image bytes 'png t :scale 0.45))
+                     (insert "\n"))
+                 (insert "Preview image unsupported in current Emacs display\n"))
+             (error
+              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
         (_
          (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
       (setq buffer-read-only t)
@@ -76,17 +97,18 @@ This function intentionally handles the direct callback form
     ('setup nil)
     ('preview
      (if cand
-         (let ((window (get-text-property 0 'hyprland-window cand)))
-           (hyprland-preview-request
-            window
-            (lambda (payload)
-              (hyprland-consult--display-preview payload))))
+         (if-let* ((window (hyprland-consult--window-from-candidate cand)))
+             (hyprland-preview-request
+              window
+              (lambda (payload)
+                (hyprland-consult--display-preview payload)))
+           (hyprland-consult--display-preview
+            (list :ok nil :message "Preview metadata missing for candidate")))
        (hyprland-consult--cleanup-preview)))
     ('exit
      (hyprland-consult--cleanup-preview))
     ('return
-     (unless cand
-       (hyprland-consult--cleanup-preview)))))
+     (hyprland-consult--cleanup-preview))))
 
 (defun hyprland--select-window-candidate ()
   "Select a window candidate using Consult when available.
@@ -99,12 +121,12 @@ Return selected window object, or nil."
                                    :prompt "Hypr window: "
                                    :require-match t
                                    :state #'hyprland-consult--state)))
-        (get-text-property 0 'hyprland-window choice)))
+        (hyprland-consult--window-from-candidate choice)))
      (cands
       (let* ((choice (completing-read "Hypr window: " cands nil t))
              (idx (cl-position choice cands :test #'string=)))
         (when idx
-          (get-text-property 0 'hyprland-window (nth idx cands)))))
+          (hyprland-consult--window-from-candidate (nth idx cands)))))
      (t nil))))
 
 (defun hyprland-window-switch ()
