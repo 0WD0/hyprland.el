@@ -19,6 +19,7 @@ Current version: ~0.1.0~ (early but usable).
 - Hyprland session (with ~HYPRLAND_INSTANCE_SIGNATURE~ in Emacs env)
 - ~hyprctl~ in PATH
 - ~grim~ in PATH (for static preview)
+- Optional: ~hyprland-toplevel-snap~ helper (for workspace/occlusion-robust preview)
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
 
 * Installation
@@ -52,6 +53,22 @@ Core commands:
 - ~M-x hyprland-tag~: apply ~+foo/-foo/foo~ tag op
 - ~M-x hyprland-sync-stop~: stop socket/timers
 
+* Toplevel helper (recommended)
+
+Build helper with ~hyprwayland-scanner~:
+
+#+begin_src bash
+make -C tools
+#+end_src
+
+By default, preview backend is ~auto~:
+
+- try ~hyprland-toplevel-snap~ first
+- fallback to ~grim~ when helper is unavailable/fails
+
+If helper is not installed in PATH, this repo's local path
+~tools/hyprland-toplevel-snap~ is auto-detected.
+
 * Ibuffer workflow (recommended)
 
 Enable mirror mode once:
@@ -81,6 +98,8 @@ Important options:
 - ~hyprland-preview-sensitive-regexp~: skip screenshot preview for matching windows
 - ~hyprland-preview-cache-mode~: ~memory-only~ (default) or ~disk~
 - ~hyprland-preview-cache-directory~: cache directory when using disk mode
+- ~hyprland-preview-capture-backend~: ~auto~ (default), ~toplevel~, or ~grim~
+- ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
 
 Reconcile defaults (already tuned):
 
