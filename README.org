@@ -113,6 +113,7 @@ Important options:
 - ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
 - ~hyprland-preview-focus-for-accurate-capture~: default ~nil~ (avoid focus flicker); set ~t~ only if you prefer aggressive grim fallback accuracy
 - ~hyprland-consult-preview-key~: Consult preview trigger (e.g. ~any~, ~(:debounce 0.3 any)~, ~"M-."~, or ~nil~)
+- ~hyprland-consult-preview-display~: ~current-window~ (default, Consult-style) or ~side-window~
 - ~hyprland-ibuffer-filter-group-name~: display name of Hyprland filter group
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 - ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command

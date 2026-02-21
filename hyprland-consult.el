@@ -16,6 +16,8 @@
 (require 'hyprland-preview)
 
 (defvar hyprland-consult--preview-buffer-name " *hyprland-preview*")
+(defvar hyprland-consult--preview-window nil)
+(defvar hyprland-consult--preview-restore nil)
 
 (defcustom hyprland-consult-preview-key '(:debounce 0.12 any)
   "Preview trigger configuration passed to `consult--read'.
@@ -27,6 +29,15 @@ Examples:
 - \"M-.\": manual preview trigger.
 - nil: disable live preview."
   :type 'sexp
+  :group 'hyprland)
+
+(defcustom hyprland-consult-preview-display 'current-window
+  "Where to display preview image during candidate navigation.
+
+- `current-window': reuse the original window (Consult-style preview).
+- `side-window': render preview in a right side window."
+  :type '(choice (const :tag "Current window" current-window)
+          (const :tag "Right side window" side-window))
   :group 'hyprland)
 
 (defun hyprland-consult--window-label (window)
@@ -50,39 +61,96 @@ return action both receive the same structured value."
             (cons (hyprland-consult--window-label window) window))
           (hyprland-windows)))
 
+(defun hyprland-consult--render-preview-buffer (buffer payload)
+  "Render PAYLOAD into preview BUFFER."
+  (with-current-buffer buffer
+    (setq buffer-read-only nil)
+    (erase-buffer)
+    (pcase (plist-get payload :ok)
+      ('t
+       (let ((bytes (plist-get payload :png-bytes)))
+         (condition-case err
+             (if (and (display-images-p)
+                      (image-type-available-p 'png))
+                 (progn
+                   (set-buffer-multibyte nil)
+                   (insert-image (create-image bytes 'png t :scale 0.45))
+                   (insert "\n"))
+               (insert "Preview image unsupported in current Emacs display\n"))
+           (error
+            (insert (format "Preview render error: %s\n" (error-message-string err)))))))
+      (_
+       (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
+    (setq buffer-read-only t)
+    (image-mode)))
+
+(defun hyprland-consult--preview-base-window ()
+  "Return target window used for in-place preview."
+  (or (when-let* ((win (and (fboundp 'consult--original-window)
+                            (consult--original-window))))
+        (and (window-live-p win)
+             (not (window-minibuffer-p win))
+             win))
+      (when-let* ((win (minibuffer-selected-window)))
+        (and (window-live-p win)
+             (not (window-minibuffer-p win))
+             win))
+      (let ((win (selected-window)))
+        (and (window-live-p win)
+             (not (window-minibuffer-p win))
+             win))))
+
+(defun hyprland-consult--display-preview-side-window (buffer)
+  "Display preview BUFFER in a dedicated side window."
+  (display-buffer-in-side-window
+   buffer
+   '((side . right) (slot . 1) (window-width . 0.33))))
+
+(defun hyprland-consult--display-preview-current-window (buffer)
+  "Display preview BUFFER in the original completion window."
+  (when-let* ((win (or (and (window-live-p hyprland-consult--preview-window)
+                            hyprland-consult--preview-window)
+                       (hyprland-consult--preview-base-window))))
+    (unless (and (window-live-p hyprland-consult--preview-window)
+                 hyprland-consult--preview-restore)
+      (setq hyprland-consult--preview-window win
+            hyprland-consult--preview-restore
+            (list (window-buffer win)
+                  (window-start win)
+                  (window-point win))))
+    (condition-case nil
+        (progn
+          (set-window-buffer win buffer)
+          (set-window-point win (point-min))
+          win)
+      (error nil))))
+
 (defun hyprland-consult--display-preview (payload)
-  "Display preview PAYLOAD in dedicated side window."
-  (let* ((buffer (get-buffer-create hyprland-consult--preview-buffer-name))
-         (window (display-buffer-in-side-window
-                  buffer
-                  '((side . right) (slot . 1) (window-width . 0.33)))))
-    (with-current-buffer buffer
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (pcase (plist-get payload :ok)
-        ('t
-         (let ((bytes (plist-get payload :png-bytes)))
-           (condition-case err
-               (if (and (display-images-p)
-                        (image-type-available-p 'png))
-                   (progn
-                     (set-buffer-multibyte nil)
-                     (insert-image (create-image bytes 'png t :scale 0.45))
-                     (insert "\n"))
-                 (insert "Preview image unsupported in current Emacs display\n"))
-             (error
-              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
-        (_
-         (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
-      (setq buffer-read-only t)
-      (image-mode))
-    window))
+  "Display preview PAYLOAD using configured display policy."
+  (let ((buffer (get-buffer-create hyprland-consult--preview-buffer-name)))
+    (hyprland-consult--render-preview-buffer buffer payload)
+    (or (and (eq hyprland-consult-preview-display 'current-window)
+             (hyprland-consult--display-preview-current-window buffer))
+        (hyprland-consult--display-preview-side-window buffer))))
 
 (defun hyprland-consult--cleanup-preview ()
-  "Close and clear preview side window/buffer."
+  "Close preview UI and restore previous window state."
   (when-let* ((buf (get-buffer hyprland-consult--preview-buffer-name)))
-    (when-let* ((win (get-buffer-window buf t)))
-      (quit-window nil win))
+    (when (and (window-live-p hyprland-consult--preview-window)
+               hyprland-consult--preview-restore)
+      (pcase-let ((`(,orig ,start ,point) hyprland-consult--preview-restore))
+        (when (buffer-live-p orig)
+          (condition-case nil
+              (progn
+                (set-window-buffer hyprland-consult--preview-window orig)
+                (set-window-start hyprland-consult--preview-window start t)
+                (set-window-point hyprland-consult--preview-window point))
+            (error nil)))))
+    (dolist (win (get-buffer-window-list buf nil t))
+      (when (window-live-p win)
+        (quit-window nil win)))
+    (setq hyprland-consult--preview-window nil
+          hyprland-consult--preview-restore nil)
     (kill-buffer buf)))
 
 (defun hyprland-consult--state (action cand)
