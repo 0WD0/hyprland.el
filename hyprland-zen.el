@@ -29,17 +29,35 @@ The host process exchanges one JSON object per line with Emacs."
   :type 'boolean
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-jump-to-window-on-tab-switch t
+  "When non-nil, tab switch also focuses corresponding Hyprland window.
+
+This uses browser-side window focus first, and keeps a best-effort mapping from
+browser window ids to Hyprland addresses for explicit `hyprland-jump' fallback."
+  :type 'boolean
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-window-class-regexp "\\(zen\\|firefox\\|chromium\\)"
+  "Regexp used to validate active Hyprland window class for tab-window mapping."
+  :type '(choice (const :tag "Disabled" nil) regexp)
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
 (defvar hyprland-zen--workspaces (make-hash-table :test #'equal)
   "Zen workspace store keyed by `browser/profile/workspace_id'.")
 
+(defvar hyprland-zen--browser-window->hyprland-address (make-hash-table :test #'equal)
+  "Best-effort map from browser window id to Hyprland address.")
+
 (defvar hyprland-zen--process nil)
 (defvar hyprland-zen--fragment "")
 
 (defvar hyprland-zen-after-refresh-hook nil
   "Hook run after Zen tab store changes.")
+
+(declare-function hyprland-jump "hyprland-sync" (address))
 
 (defun hyprland-zen--usable-executable-p (path)
   "Return non-nil when PATH points to a non-empty executable file."
@@ -83,6 +101,58 @@ The host process exchanges one JSON object per line with Emacs."
     (if (string-empty-p out)
         (or fallback "")
       out)))
+
+(defun hyprland-zen--window-id (tab)
+  "Return normalized browser window id string from TAB payload."
+  (let ((value (or (hyprland-zen--field tab 'window_id)
+                   (hyprland-zen--field tab 'windowId))))
+    (let ((out (hyprland-zen--string value)))
+      (unless (string-empty-p out)
+        out))))
+
+(defun hyprland-zen--active-hyprland-window-address ()
+  "Return active Hyprland window address when class matches zen browser regexp."
+  (condition-case _err
+      (when-let* ((active (hyprland--hyprctl-json "activewindow"))
+                  (address-raw (hyprland-zen--field active 'address))
+                  (address (hyprland--normalize-address address-raw)))
+        (let* ((class (downcase (hyprland-zen--string (hyprland-zen--field active 'class))))
+               (ok (or (null hyprland-zen-window-class-regexp)
+                       (string-match-p hyprland-zen-window-class-regexp class))))
+          (when ok address)))
+    (error nil)))
+
+(defun hyprland-zen--remember-window-address (window-id &optional address)
+  "Store mapping from browser WINDOW-ID to Hyprland ADDRESS.
+
+When ADDRESS is nil, use current active Hyprland window address."
+  (when-let* ((wid (hyprland-zen--string window-id))
+              (_ (not (string-empty-p wid)))
+              (resolved (or address (hyprland-zen--active-hyprland-window-address))))
+    (puthash wid resolved hyprland-zen--browser-window->hyprland-address)
+    resolved))
+
+(defun hyprland-zen--schedule-window-address-refresh (window-id)
+  "Refresh browser WINDOW-ID -> Hyprland address mapping shortly after focus."
+  (when (and hyprland-zen-jump-to-window-on-tab-switch
+             (stringp window-id)
+             (not (string-empty-p window-id)))
+    (run-at-time 0.12 nil #'hyprland-zen--remember-window-address window-id)))
+
+(defun hyprland-zen--jump-to-known-window (window-id)
+  "Jump to mapped Hyprland window for browser WINDOW-ID.
+
+Return non-nil when jump was dispatched."
+  (when (and hyprland-zen-jump-to-window-on-tab-switch
+             (fboundp 'hyprland-jump)
+             (stringp window-id)
+             (not (string-empty-p window-id)))
+    (when-let* ((address (gethash window-id hyprland-zen--browser-window->hyprland-address)))
+      (condition-case _err
+          (progn
+            (hyprland-jump address)
+            t)
+        (error nil)))))
 
 (defun hyprland-zen--workspace-id-from-tab (tab)
   "Extract workspace id from TAB payload."
@@ -146,16 +216,24 @@ The host process exchanges one JSON object per line with Emacs."
   (let* ((tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
          (browser (hyprland-zen--string (hyprland-zen--field tab 'browser) "zen"))
          (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
+         (window-id (hyprland-zen--string (hyprland-zen--window-id tab)))
+         (cookie-store (hyprland-zen--string (or (hyprland-zen--field tab 'cookie_store_id)
+                                                 (hyprland-zen--field tab 'cookieStoreId))
+                                             "default"))
+         (sync-group (hyprland-zen--string (hyprland-zen--field tab 'sync_group)
+                                           (format "container:%s" cookie-store)))
          (workspace-id (hyprland-zen--workspace-id-from-tab tab))
          (workspace-name (hyprland-zen--workspace-name-from-tab tab)))
     (unless (string-empty-p tab-id)
       (list
        (cons 'browser browser)
        (cons 'profile profile)
+       (cons 'sync_group sync-group)
+       (cons 'cookie_store_id cookie-store)
        (cons 'workspace_id workspace-id)
        (cons 'workspace_name workspace-name)
        (cons 'tab_id tab-id)
-       (cons 'window_id (hyprland-zen--string (hyprland-zen--field tab 'window_id)))
+       (cons 'window_id window-id)
        (cons 'url (hyprland-zen--string (hyprland-zen--field tab 'url)))
        (cons 'title (hyprland-zen--string (hyprland-zen--field tab 'title) "<untitled tab>"))
        (cons 'audible (hyprland-zen--truthy-p (hyprland-zen--field tab 'audible)))
@@ -174,7 +252,8 @@ The host process exchanges one JSON object per line with Emacs."
 (defun hyprland-zen--clear-store ()
   "Clear in-memory Zen stores."
   (clrhash hyprland-zen--tabs)
-  (clrhash hyprland-zen--workspaces))
+  (clrhash hyprland-zen--workspaces)
+  (clrhash hyprland-zen--browser-window->hyprland-address))
 
 (defun hyprland-zen--store-workspace (workspace)
   "Store WORKSPACE in memory after normalization."
@@ -253,9 +332,10 @@ Active tabs are sorted first, then by title."
         (pinned (if (hyprland-zen--truthy-p (hyprland-zen--field tab 'pinned)) "!" " "))
         (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
         (workspace (hyprland-zen--string (hyprland-zen--field tab 'workspace_name) "default"))
+        (window-id (hyprland-zen--string (hyprland-zen--field tab 'window_id) "?"))
         (title (hyprland-zen--string (hyprland-zen--field tab 'title) "<untitled tab>"))
         (key (hyprland-zen--tab-key tab)))
-    (format "%s%s[%s/%s] %s <%s>" active pinned profile workspace title key)))
+    (format "%s%s[%s/%s W%s] %s <%s>" active pinned profile workspace window-id title key)))
 
 (defun hyprland-zen--workspace-label (workspace)
   "Build completion label from WORKSPACE alist."
@@ -305,8 +385,11 @@ Active tabs are sorted first, then by title."
      t)
     ("upsert"
      (when-let* ((tab (or (hyprland-zen--field message 'tab)
-                          message)))
-       (hyprland-zen--store-tab tab)
+                          message))
+                 (stored (hyprland-zen--store-tab tab)))
+       (when (hyprland-zen--truthy-p (hyprland-zen--field stored 'active))
+         (when-let* ((window-id (hyprland-zen--window-id stored)))
+           (hyprland-zen--schedule-window-address-refresh window-id)))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t))
     ((or "workspace-upsert" "workspace_upsert")
@@ -459,9 +542,14 @@ Active tabs are sorted first, then by title."
 When TAB is nil, prompt from current registry."
   (interactive)
   (let* ((target (or tab (hyprland-zen--read-tab "Zen tab: ")))
-         (key (hyprland-zen--tab-key target)))
+         (key (hyprland-zen--tab-key target))
+         (window-id (hyprland-zen--window-id target)))
+    (when window-id
+      (hyprland-zen--jump-to-known-window window-id))
     (hyprland-zen--send `((op . "activate-tab")
                           (key . ,key)))
+    (when window-id
+      (hyprland-zen--schedule-window-address-refresh window-id))
     key))
 
 (defun hyprland-zen-tab-close (&optional tab)

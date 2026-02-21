@@ -62,9 +62,19 @@ Native-host executables live in:
 - inbound from browser events:
   - ~snapshot~, ~upsert~, ~remove~
   - ~workspace_snapshot~, ~workspace-upsert~, ~workspace-remove~
+  - tab payload includes ~window_id~, ~cookie_store_id~, and heuristic ~sync_group~
 - inbound preview response:
   - ~preview~ (data URL image)
 - accepted ops from host:
   - ~list-tabs~, ~list-workspaces~
   - ~activate-tab~, ~close-tab~, ~open-url~
   - ~activate-workspace~, ~capture-tab~, ~ping~
+
+* Zen sync-window note
+
+Zen sync-window/workspace internals (for example internal workspace UUID and
+unsynced-window flags) are not available to regular WebExtensions.
+This extension therefore uses public API identifiers and heuristics:
+
+- workspace key: ~windowId + cookieStoreId~
+- sync group hint: ~container:<cookieStoreId>~

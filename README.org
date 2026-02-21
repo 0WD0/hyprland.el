@@ -151,7 +151,7 @@ Use tab commands:
 
 - ~M-x hyprland-zen-refresh~ (request full snapshot)
 - ~M-x hyprland-zen-refresh-workspaces~ (request workspace snapshot)
-- ~M-x hyprland-zen-tab-switch~ (activate selected tab)
+- ~M-x hyprland-zen-tab-switch~ (activate selected tab and focus its browser window)
 - ~M-x hyprland-zen-tab-close~ (close selected tab)
 - ~M-x hyprland-zen-workspace-switch~ (activate selected workspace)
 - ~M-x hyprland-zen-open-url~ (open URL in Zen)
@@ -161,6 +161,11 @@ Host protocol (line-delimited JSON, one object per line):
 - inbound tab events: ~snapshot~, ~upsert~, ~remove~
 - inbound workspace events: ~workspace_snapshot~, ~workspace-upsert~, ~workspace-remove~
 - outbound ops: ~list-tabs~, ~list-workspaces~, ~activate-tab~, ~close-tab~, ~activate-workspace~, ~open-url~
+
+Limitations from current Zen WebExtension surface:
+
+- Zen internal workspace UUID and synced-window identity are not exposed to WebExtensions.
+- Current mapping uses public fields (~windowId~, ~cookieStoreId~) and emits ~sync_group~ as a heuristic (~container:<cookieStoreId>~).
 
 * Customization
 

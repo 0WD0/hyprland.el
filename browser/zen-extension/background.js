@@ -23,11 +23,13 @@ function workspacePayloadFromTab(tab) {
 }
 
 function tabPayload(tab) {
+  const cookieStoreId = tab.cookieStoreId || "default";
   return {
     browser: "zen",
     profile: "default",
     workspace_id: workspaceKey(tab),
     workspace_name: workspaceKey(tab),
+    sync_group: `container:${cookieStoreId}`,
     tab_id: String(tab.id),
     window_id: String(tab.windowId),
     url: tab.url || "",
@@ -36,7 +38,7 @@ function tabPayload(tab) {
     pinned: !!tab.pinned,
     active: !!tab.active,
     discarded: !!tab.discarded,
-    cookie_store_id: tab.cookieStoreId || "default",
+    cookie_store_id: cookieStoreId,
     status: tab.status || "",
     last_seen: Date.now()
   };
@@ -148,7 +150,12 @@ async function handleOp(message) {
       await sendWorkspaceSnapshot();
       break;
     case "activate-tab":
-      await browser.tabs.update(parseTabIdFromMessage(message), { active: true });
+      {
+        const tabId = parseTabIdFromMessage(message);
+        const tab = await browser.tabs.get(tabId);
+        await browser.windows.update(tab.windowId, { focused: true });
+        await browser.tabs.update(tabId, { active: true });
+      }
       break;
     case "close-tab":
       await browser.tabs.remove(parseTabIdFromMessage(message));
