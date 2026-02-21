@@ -1,0 +1,65 @@
+#+title: hyprland-zen bridge extension
+
+* Overview
+
+This WebExtension streams Zen/Firefox tab state to a native host and accepts
+commands from that host.
+
+Current workspace support is Firefox-compatible and derived from:
+
+- browser window id
+- cookieStoreId (container)
+
+So it works on plain Firefox and Zen, while leaving room for future Zen-only
+workspace APIs.
+
+* Load in Zen/Firefox
+
+1. Open ~about:debugging#/runtime/this-firefox~
+2. Click ~Load Temporary Add-on~
+3. Pick this file: ~manifest.json~
+
+If native host is not installed yet, the extension still runs and prints bridge
+messages to Browser Toolbox console via ~console.debug~.
+
+* Native host name
+
+The extension connects to:
+
+~hyprland_zen_bridge~
+
+Install a native host manifest under Firefox NativeMessagingHosts for your OS.
+Use the template in:
+
+~../native-host/hyprland_zen_bridge.json~
+
+* Quick test flow
+
+1. Load temporary add-on from ~manifest.json~
+2. Open Browser Toolbox and verify you see ~[hyprland-zen-extension]~ logs
+3. Open/close/switch tabs and confirm event logs include:
+   - ~upsert/remove~
+   - ~workspace-upsert~
+4. In Emacs, run:
+
+#+begin_src emacs-lisp
+(hyprland-zen-start)
+(hyprland-zen-refresh)
+(hyprland-zen-refresh-workspaces)
+#+end_src
+
+5. Once native host path is installed, verify commands:
+   - ~M-x hyprland-zen-tab-switch~
+   - ~M-x hyprland-zen-workspace-switch~
+
+* Message model
+
+- inbound from browser events:
+  - ~snapshot~, ~upsert~, ~remove~
+  - ~workspace_snapshot~, ~workspace-upsert~, ~workspace-remove~
+- inbound preview response:
+  - ~preview~ (data URL image)
+- accepted ops from host:
+  - ~list-tabs~, ~list-workspaces~
+  - ~activate-tab~, ~close-tab~, ~open-url~
+  - ~activate-workspace~, ~capture-tab~, ~ping~

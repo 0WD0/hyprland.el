@@ -23,6 +23,7 @@ Current version: ~0.1.0~ (early but usable).
 - Optional: ~hyprland-toplevel-snap~ helper (for workspace/occlusion-robust preview)
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
 - Optional: ~hyprland-zen-host~ executable (for ~hyprland-zen-*~ commands)
+- Optional: Zen/Firefox WebExtension under ~browser/zen-extension/~
 
 * Installation
 
@@ -56,6 +57,7 @@ Core commands:
 - ~M-x hyprland-ibuffer-doctor~: repair ibuffer profile/index drift
 - ~M-x hyprland-zen-start~: start Zen tab host bridge
 - ~M-x hyprland-zen-tab-switch~: choose and activate a Zen tab
+- ~M-x hyprland-zen-workspace-switch~: choose and activate a Zen workspace
 - ~M-x hyprland-sync-stop~: stop socket/timers
 
 * Toplevel helper (recommended)
@@ -106,6 +108,32 @@ No extra custom keybindings are required.
 
 This is the first integration slice for browser-tab workflows.
 
+Plugin scaffold now exists in this repo:
+
+- ~browser/zen-extension/manifest.json~
+- ~browser/zen-extension/background.js~
+- ~browser/native-host/hyprland_zen_bridge.json~ (template)
+
+It runs on Firefox-compatible APIs, so it works on Zen and plain Firefox.
+Workspace is currently derived as ~windowId + cookieStoreId~.
+For future Zen-only workspace semantics, we can add an optional Zen-specific
+provider while keeping this fallback path.
+
+Testing path:
+
+1. Load temporary extension from ~browser/zen-extension/manifest.json~
+2. Install native host manifest from ~browser/native-host/hyprland_zen_bridge.json~
+3. In Emacs run:
+
+#+begin_src emacs-lisp
+(hyprland-zen-start)
+(hyprland-zen-refresh)
+(hyprland-zen-refresh-workspaces)
+#+end_src
+
+Without native host wiring, extension can still be smoke-tested via Browser
+Toolbox logs (~[hyprland-zen-extension]~).
+
 Start bridge process:
 
 #+begin_src emacs-lisp
@@ -115,14 +143,17 @@ Start bridge process:
 Use tab commands:
 
 - ~M-x hyprland-zen-refresh~ (request full snapshot)
+- ~M-x hyprland-zen-refresh-workspaces~ (request workspace snapshot)
 - ~M-x hyprland-zen-tab-switch~ (activate selected tab)
 - ~M-x hyprland-zen-tab-close~ (close selected tab)
+- ~M-x hyprland-zen-workspace-switch~ (activate selected workspace)
 - ~M-x hyprland-zen-open-url~ (open URL in Zen)
 
 Host protocol (line-delimited JSON, one object per line):
 
-- inbound events: ~snapshot~, ~upsert~, ~remove~
-- outbound ops: ~list-tabs~, ~activate-tab~, ~close-tab~, ~open-url~
+- inbound tab events: ~snapshot~, ~upsert~, ~remove~
+- inbound workspace events: ~workspace_snapshot~, ~workspace-upsert~, ~workspace-remove~
+- outbound ops: ~list-tabs~, ~list-workspaces~, ~activate-tab~, ~close-tab~, ~activate-workspace~, ~open-url~
 
 * Customization
 

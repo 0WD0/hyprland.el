@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "hyprland-zen bridge",
+  "version": "0.1.0",
+  "description": "Bridge Zen/Firefox tabs and workspaces to hyprland-zen host via native messaging.",
+  "permissions": [
+    "tabs",
+    "nativeMessaging",
+    "<all_urls>"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "hyprland-zen-bridge@0wd0",
+      "strict_min_version": "115.0"
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  }
+}
