@@ -8,6 +8,7 @@
 - Reconcile policy to keep state converged under noisy events
 - Consult-based window switch with static preview
 - Ibuffer-native workflow via mirrored window buffers
+- Experimental Zen tab bridge over native-host JSON protocol
 
 * Status
 
@@ -21,6 +22,7 @@ Current version: ~0.1.0~ (early but usable).
 - ~grim~ in PATH (for static preview)
 - Optional: ~hyprland-toplevel-snap~ helper (for workspace/occlusion-robust preview)
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
+- Optional: ~hyprland-zen-host~ executable (for ~hyprland-zen-*~ commands)
 
 * Installation
 
@@ -52,6 +54,8 @@ Core commands:
 - ~M-x hyprland-close~: close a window by address
 - ~M-x hyprland-tag~: apply ~+foo/-foo/foo~ tag op
 - ~M-x hyprland-ibuffer-doctor~: repair ibuffer profile/index drift
+- ~M-x hyprland-zen-start~: start Zen tab host bridge
+- ~M-x hyprland-zen-tab-switch~: choose and activate a Zen tab
 - ~M-x hyprland-sync-stop~: stop socket/timers
 
 * Toplevel helper (recommended)
@@ -98,6 +102,28 @@ Inside this ibuffer view, existing ibuffer commands are remapped:
 
 No extra custom keybindings are required.
 
+* Zen tab bridge (experimental)
+
+This is the first integration slice for browser-tab workflows.
+
+Start bridge process:
+
+#+begin_src emacs-lisp
+(hyprland-zen-start)
+#+end_src
+
+Use tab commands:
+
+- ~M-x hyprland-zen-refresh~ (request full snapshot)
+- ~M-x hyprland-zen-tab-switch~ (activate selected tab)
+- ~M-x hyprland-zen-tab-close~ (close selected tab)
+- ~M-x hyprland-zen-open-url~ (open URL in Zen)
+
+Host protocol (line-delimited JSON, one object per line):
+
+- inbound events: ~snapshot~, ~upsert~, ~remove~
+- outbound ops: ~list-tabs~, ~activate-tab~, ~close-tab~, ~open-url~
+
 * Customization
 
 Important options:
@@ -118,6 +144,8 @@ Important options:
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 - ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command
 - ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
+- ~hyprland-zen-host-command~: command list used to launch Zen host process
+- ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
 
 Reconcile defaults (already tuned):
 

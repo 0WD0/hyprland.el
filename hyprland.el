@@ -26,6 +26,7 @@
 (require 'hyprland-preview)
 (require 'hyprland-consult)
 (require 'hyprland-ibuffer)
+(require 'hyprland-zen)
 
 (provide 'hyprland)
 ;;; hyprland.el ends here

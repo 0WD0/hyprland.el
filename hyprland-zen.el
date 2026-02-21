@@ -1,0 +1,471 @@
+;;; hyprland-zen.el --- Zen browser bridge for hyprland.el -*- lexical-binding: t; -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+
+;; Experimental Zen tab bridge over a line-delimited JSON host process.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'json)
+(require 'subr-x)
+(require 'hyprland-base)
+
+(defgroup hyprland-zen nil
+  "Zen browser integration for hyprland.el."
+  :group 'hyprland)
+
+(defcustom hyprland-zen-host-command '("hyprland-zen-host")
+  "Command list used to launch the Zen native host bridge.
+
+The host process exchanges one JSON object per line with Emacs."
+  :type '(repeat string)
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-auto-refresh-on-start t
+  "When non-nil, send an initial tab snapshot request after start."
+  :type 'boolean
+  :group 'hyprland-zen)
+
+(defvar hyprland-zen--tabs (make-hash-table :test #'equal)
+  "Zen tab store keyed by `browser/profile/tab_id'.")
+
+(defvar hyprland-zen--workspaces (make-hash-table :test #'equal)
+  "Zen workspace store keyed by `browser/profile/workspace_id'.")
+
+(defvar hyprland-zen--process nil)
+(defvar hyprland-zen--fragment "")
+
+(defvar hyprland-zen-after-refresh-hook nil
+  "Hook run after Zen tab store changes.")
+
+(defun hyprland-zen--field (alist key)
+  "Return ALIST field KEY, allowing both symbol and string keys."
+  (or (alist-get key alist)
+      (alist-get (symbol-name key) alist nil nil #'string=)))
+
+(defun hyprland-zen--truthy-p (value)
+  "Return non-nil when VALUE should be interpreted as true."
+  (not (or (null value)
+           (eq value :false)
+           (eq value 0)
+           (equal value "0")
+           (equal value "false"))))
+
+(defun hyprland-zen--string (value &optional fallback)
+  "Return VALUE as string, or FALLBACK when empty/nil."
+  (let ((out (if (null value) "" (string-trim (format "%s" value)))))
+    (if (string-empty-p out)
+        (or fallback "")
+      out)))
+
+(defun hyprland-zen--workspace-id-from-tab (tab)
+  "Extract workspace id from TAB payload."
+  (let* ((workspace (hyprland-zen--field tab 'workspace))
+         (raw (or (hyprland-zen--field tab 'workspace_id)
+                  (hyprland-zen--field tab 'workspaceId)
+                  (when (listp workspace)
+                    (or (hyprland-zen--field workspace 'id)
+                        (hyprland-zen--field workspace 'workspace_id)))
+                  (unless (listp workspace) workspace))))
+    (hyprland-zen--string raw "default")))
+
+(defun hyprland-zen--workspace-name-from-tab (tab)
+  "Extract workspace display name from TAB payload."
+  (let* ((workspace (hyprland-zen--field tab 'workspace))
+         (raw (or (hyprland-zen--field tab 'workspace_name)
+                  (hyprland-zen--field tab 'workspaceName)
+                  (when (listp workspace)
+                    (or (hyprland-zen--field workspace 'name)
+                        (hyprland-zen--field workspace 'title)
+                        (hyprland-zen--field workspace 'workspace_name))))))
+    (hyprland-zen--string raw "default")))
+
+(defun hyprland-zen--normalize-workspace (workspace)
+  "Normalize WORKSPACE alist shape used by the workspace store."
+  (let* ((browser (hyprland-zen--string (hyprland-zen--field workspace 'browser) "zen"))
+         (profile (hyprland-zen--string (hyprland-zen--field workspace 'profile) "default"))
+         (workspace-id
+          (hyprland-zen--string
+           (or (hyprland-zen--field workspace 'workspace_id)
+               (hyprland-zen--field workspace 'workspaceId)
+               (hyprland-zen--field workspace 'id)
+               (hyprland-zen--field workspace 'workspace))
+           "default"))
+         (name
+          (hyprland-zen--string
+           (or (hyprland-zen--field workspace 'name)
+               (hyprland-zen--field workspace 'title)
+               workspace-id)
+           "default")))
+    (list
+     (cons 'browser browser)
+     (cons 'profile profile)
+     (cons 'workspace_id workspace-id)
+     (cons 'name name)
+     (cons 'active (hyprland-zen--truthy-p (hyprland-zen--field workspace 'active)))
+     (cons 'icon (hyprland-zen--string (hyprland-zen--field workspace 'icon)))
+     (cons 'color (hyprland-zen--string (hyprland-zen--field workspace 'color)))
+     (cons 'last_seen (hyprland-zen--field workspace 'last_seen)))))
+
+(defun hyprland-zen--workspace-key (workspace)
+  "Return stable key for WORKSPACE alist."
+  (when-let* ((normalized (hyprland-zen--normalize-workspace workspace)))
+    (format "%s/%s/%s"
+            (hyprland-zen--field normalized 'browser)
+            (hyprland-zen--field normalized 'profile)
+            (hyprland-zen--field normalized 'workspace_id))))
+
+(defun hyprland-zen--normalize-tab (tab)
+  "Normalize TAB alist shape used by the Zen store."
+  (let* ((tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
+         (browser (hyprland-zen--string (hyprland-zen--field tab 'browser) "zen"))
+         (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
+         (workspace-id (hyprland-zen--workspace-id-from-tab tab))
+         (workspace-name (hyprland-zen--workspace-name-from-tab tab)))
+    (unless (string-empty-p tab-id)
+      (list
+       (cons 'browser browser)
+       (cons 'profile profile)
+       (cons 'workspace_id workspace-id)
+       (cons 'workspace_name workspace-name)
+       (cons 'tab_id tab-id)
+       (cons 'window_id (hyprland-zen--string (hyprland-zen--field tab 'window_id)))
+       (cons 'url (hyprland-zen--string (hyprland-zen--field tab 'url)))
+       (cons 'title (hyprland-zen--string (hyprland-zen--field tab 'title) "<untitled tab>"))
+       (cons 'audible (hyprland-zen--truthy-p (hyprland-zen--field tab 'audible)))
+       (cons 'pinned (hyprland-zen--truthy-p (hyprland-zen--field tab 'pinned)))
+       (cons 'active (hyprland-zen--truthy-p (hyprland-zen--field tab 'active)))
+       (cons 'last_seen (hyprland-zen--field tab 'last_seen))))))
+
+(defun hyprland-zen--tab-key (tab)
+  "Return stable key for TAB alist."
+  (when-let* ((normalized (hyprland-zen--normalize-tab tab)))
+    (format "%s/%s/%s"
+            (hyprland-zen--field normalized 'browser)
+            (hyprland-zen--field normalized 'profile)
+            (hyprland-zen--field normalized 'tab_id))))
+
+(defun hyprland-zen--clear-store ()
+  "Clear in-memory Zen stores."
+  (clrhash hyprland-zen--tabs)
+  (clrhash hyprland-zen--workspaces))
+
+(defun hyprland-zen--store-workspace (workspace)
+  "Store WORKSPACE in memory after normalization."
+  (when-let* ((normalized (hyprland-zen--normalize-workspace workspace))
+              (key (hyprland-zen--workspace-key normalized)))
+    (puthash key normalized hyprland-zen--workspaces)
+    normalized))
+
+(defun hyprland-zen--ensure-workspace-from-tab (tab)
+  "Insert workspace inferred from TAB when missing in store."
+  (when-let* ((workspace
+               (hyprland-zen--normalize-workspace
+                `((browser . ,(hyprland-zen--field tab 'browser))
+                  (profile . ,(hyprland-zen--field tab 'profile))
+                  (workspace_id . ,(hyprland-zen--field tab 'workspace_id))
+                  (name . ,(hyprland-zen--field tab 'workspace_name)))) )
+              (key (hyprland-zen--workspace-key workspace)))
+    (unless (gethash key hyprland-zen--workspaces)
+      (puthash key workspace hyprland-zen--workspaces))
+    workspace))
+
+(defun hyprland-zen--store-tab (tab)
+  "Store TAB in memory after normalization."
+  (when-let* ((normalized (hyprland-zen--normalize-tab tab))
+              (key (hyprland-zen--tab-key normalized)))
+    (puthash key normalized hyprland-zen--tabs)
+    (hyprland-zen--ensure-workspace-from-tab normalized)
+    normalized))
+
+(defun hyprland-zen--remove-tab-by-key (key)
+  "Remove tab KEY from the in-memory store."
+  (when (and (stringp key) (not (string-empty-p key)))
+    (remhash key hyprland-zen--tabs)))
+
+(defun hyprland-zen-tab-get (key)
+  "Return tab object for KEY, or nil."
+  (gethash key hyprland-zen--tabs))
+
+(defun hyprland-zen-workspace-get (key)
+  "Return workspace object for KEY, or nil."
+  (gethash key hyprland-zen--workspaces))
+
+(defun hyprland-zen-workspaces ()
+  "Return current Zen workspace list.
+
+Active workspaces are sorted first, then by name." 
+  (let (out)
+    (maphash (lambda (_key workspace) (push workspace out)) hyprland-zen--workspaces)
+    (sort out
+          (lambda (a b)
+            (let ((a-active (hyprland-zen--truthy-p (hyprland-zen--field a 'active)))
+                  (b-active (hyprland-zen--truthy-p (hyprland-zen--field b 'active))))
+              (if (eq a-active b-active)
+                  (string-lessp (hyprland-zen--string (hyprland-zen--field a 'name))
+                                (hyprland-zen--string (hyprland-zen--field b 'name)))
+                a-active))))))
+
+(defun hyprland-zen-tabs ()
+  "Return current Zen tab list.
+
+Active tabs are sorted first, then by title."
+  (let (out)
+    (maphash (lambda (_key tab) (push tab out)) hyprland-zen--tabs)
+    (sort out
+          (lambda (a b)
+            (let ((a-active (hyprland-zen--truthy-p (hyprland-zen--field a 'active)))
+                  (b-active (hyprland-zen--truthy-p (hyprland-zen--field b 'active))))
+              (if (eq a-active b-active)
+                  (string-lessp (hyprland-zen--string (hyprland-zen--field a 'title))
+                                (hyprland-zen--string (hyprland-zen--field b 'title)))
+                a-active))))))
+
+(defun hyprland-zen--tab-label (tab)
+  "Build completion label from TAB alist." 
+  (let ((active (if (hyprland-zen--truthy-p (hyprland-zen--field tab 'active)) "*" " "))
+        (pinned (if (hyprland-zen--truthy-p (hyprland-zen--field tab 'pinned)) "!" " "))
+        (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
+        (workspace (hyprland-zen--string (hyprland-zen--field tab 'workspace_name) "default"))
+        (title (hyprland-zen--string (hyprland-zen--field tab 'title) "<untitled tab>"))
+        (key (hyprland-zen--tab-key tab)))
+    (format "%s%s[%s/%s] %s <%s>" active pinned profile workspace title key)))
+
+(defun hyprland-zen--workspace-label (workspace)
+  "Build completion label from WORKSPACE alist." 
+  (let ((active (if (hyprland-zen--truthy-p (hyprland-zen--field workspace 'active)) "*" " "))
+        (profile (hyprland-zen--string (hyprland-zen--field workspace 'profile) "default"))
+        (name (hyprland-zen--string (hyprland-zen--field workspace 'name) "default"))
+        (key (hyprland-zen--workspace-key workspace)))
+    (format "%s[%s] %s <%s>" active profile name key)))
+
+(defun hyprland-zen--message-type (message)
+  "Return normalized type string from MESSAGE alist."
+  (downcase
+   (hyprland-zen--string
+    (or (hyprland-zen--field message 'type)
+        (hyprland-zen--field message 'event)))))
+
+(defun hyprland-zen--remove-message-key (message)
+  "Extract tab key from MESSAGE remove payload." 
+  (or (hyprland-zen--field message 'key)
+      (when-let* ((tab (hyprland-zen--field message 'tab)))
+        (hyprland-zen--tab-key tab))
+      (hyprland-zen--tab-key message)))
+
+(defun hyprland-zen--remove-workspace-key (message)
+  "Extract workspace key from MESSAGE remove payload." 
+  (or (hyprland-zen--field message 'key)
+      (when-let* ((workspace (hyprland-zen--field message 'workspace)))
+        (hyprland-zen--workspace-key workspace))
+      (hyprland-zen--workspace-key message)))
+
+(defun hyprland-zen--apply-message (message)
+  "Apply parsed host MESSAGE to in-memory state." 
+  (pcase (hyprland-zen--message-type message)
+    ("snapshot"
+     (hyprland-zen--clear-store)
+     (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+       (hyprland-zen--store-workspace workspace))
+     (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
+       (hyprland-zen--store-tab tab))
+     (run-hooks 'hyprland-zen-after-refresh-hook)
+     t)
+    ((or "workspace-snapshot" "workspace_snapshot")
+     (clrhash hyprland-zen--workspaces)
+     (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+       (hyprland-zen--store-workspace workspace))
+     (run-hooks 'hyprland-zen-after-refresh-hook)
+     t)
+    ("upsert"
+     (when-let* ((tab (or (hyprland-zen--field message 'tab)
+                          message)))
+       (hyprland-zen--store-tab tab)
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t))
+    ((or "workspace-upsert" "workspace_upsert")
+     (when-let* ((workspace (or (hyprland-zen--field message 'workspace)
+                                message)))
+       (hyprland-zen--store-workspace workspace)
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t))
+    ("remove"
+     (when-let* ((key (hyprland-zen--remove-message-key message)))
+       (hyprland-zen--remove-tab-by-key key)
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t))
+    ((or "workspace-remove" "workspace_remove")
+     (when-let* ((key (hyprland-zen--remove-workspace-key message)))
+       (remhash key hyprland-zen--workspaces)
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t))
+    ("error"
+     (hyprland--debug "zen host error: %s"
+                      (hyprland-zen--string (hyprland-zen--field message 'message) "unknown"))
+     nil)
+    (_
+     (hyprland--debug "zen host unknown payload: %S" message)
+     nil)))
+
+(defun hyprland-zen--parse-json (line)
+  "Parse JSON LINE into Lisp object, returning nil on failure."
+  (condition-case err
+      (let ((json-array-type 'list)
+            (json-object-type 'alist)
+            (json-false :false)
+            (json-null nil))
+        (json-read-from-string line))
+    (error
+     (hyprland--debug "zen invalid json line: %s (%s)" line (error-message-string err))
+     nil)))
+
+(defun hyprland-zen--handle-line (line)
+  "Handle one decoded protocol LINE from host process."
+  (when-let* ((payload (hyprland-zen--parse-json line)))
+    (hyprland-zen--apply-message payload)))
+
+(defun hyprland-zen--process-filter (_proc chunk)
+  "Accumulate CHUNK and dispatch complete JSON lines."
+  (setq hyprland-zen--fragment (concat hyprland-zen--fragment chunk))
+  (let ((start 0)
+        line)
+    (while (string-match "\n" hyprland-zen--fragment start)
+      (setq line (substring hyprland-zen--fragment start (match-beginning 0)))
+      (setq start (match-end 0))
+      (unless (string-empty-p line)
+        (hyprland-zen--handle-line line)))
+    (setq hyprland-zen--fragment
+          (substring hyprland-zen--fragment start))))
+
+(defun hyprland-zen--process-sentinel (proc event)
+  "Handle Zen host PROC lifecycle EVENT."
+  (hyprland--debug "zen host sentinel: %s" (string-trim event))
+  (unless (process-live-p proc)
+    (setq hyprland-zen--process nil
+          hyprland-zen--fragment "")))
+
+(defun hyprland-zen-running-p ()
+  "Return non-nil when Zen host process is running."
+  (process-live-p hyprland-zen--process))
+
+(defun hyprland-zen--send (payload)
+  "Send JSON PAYLOAD to running host process."
+  (unless (hyprland-zen-running-p)
+    (user-error "hyprland-zen host is not running"))
+  (process-send-string hyprland-zen--process
+                       (concat (json-encode payload) "\n")))
+
+(defun hyprland-zen-start ()
+  "Start Zen native host process."
+  (interactive)
+  (if (hyprland-zen-running-p)
+      hyprland-zen--process
+    (unless (and (listp hyprland-zen-host-command)
+                 (car hyprland-zen-host-command))
+      (user-error "`hyprland-zen-host-command' must be a non-empty command list"))
+    (setq hyprland-zen--fragment "")
+    (setq hyprland-zen--process
+          (make-process
+           :name "hyprland-zen-host"
+           :command hyprland-zen-host-command
+           :buffer nil
+           :noquery t
+           :connection-type 'pipe
+           :coding 'utf-8-unix
+           :filter #'hyprland-zen--process-filter
+           :sentinel #'hyprland-zen--process-sentinel))
+    (when hyprland-zen-auto-refresh-on-start
+      (hyprland-zen-refresh)
+      (hyprland-zen-refresh-workspaces))
+    hyprland-zen--process))
+
+(defun hyprland-zen-stop ()
+  "Stop Zen native host process."
+  (interactive)
+  (when (process-live-p hyprland-zen--process)
+    (delete-process hyprland-zen--process))
+  (setq hyprland-zen--process nil
+        hyprland-zen--fragment ""))
+
+(defun hyprland-zen-refresh ()
+  "Request full tab snapshot from Zen host." 
+  (interactive)
+  (hyprland-zen--send '((op . "list-tabs"))))
+
+(defun hyprland-zen-refresh-workspaces ()
+  "Request full workspace snapshot from Zen host." 
+  (interactive)
+  (hyprland-zen--send '((op . "list-workspaces"))))
+
+(defun hyprland-zen-open-url (url)
+  "Ask Zen host to open URL."
+  (interactive "sOpen URL in Zen: ")
+  (hyprland-zen--send `((op . "open-url")
+                        (url . ,url))))
+
+(defun hyprland-zen--read-tab (prompt)
+  "Read tab from completion list using PROMPT."
+  (let* ((tabs (hyprland-zen-tabs))
+         (cands (mapcar (lambda (tab)
+                          (cons (hyprland-zen--tab-label tab) tab))
+                        tabs)))
+    (unless cands
+      (user-error "No Zen tabs available"))
+    (cdr (assoc (completing-read prompt cands nil t) cands))))
+
+(defun hyprland-zen--read-workspace (prompt)
+  "Read workspace from completion list using PROMPT." 
+  (let* ((workspaces (hyprland-zen-workspaces))
+         (cands (mapcar (lambda (workspace)
+                          (cons (hyprland-zen--workspace-label workspace) workspace))
+                        workspaces)))
+    (unless cands
+      (user-error "No Zen workspaces available"))
+    (cdr (assoc (completing-read prompt cands nil t) cands))))
+
+(defun hyprland-zen-tab-switch (&optional tab)
+  "Activate TAB via host command.
+
+When TAB is nil, prompt from current registry."
+  (interactive)
+  (let* ((target (or tab (hyprland-zen--read-tab "Zen tab: ")))
+         (key (hyprland-zen--tab-key target)))
+    (hyprland-zen--send `((op . "activate-tab")
+                          (key . ,key)))
+    key))
+
+(defun hyprland-zen-tab-close (&optional tab)
+  "Close TAB via host command.
+
+When TAB is nil, prompt from current registry."
+  (interactive)
+  (let* ((target (or tab (hyprland-zen--read-tab "Close Zen tab: ")))
+         (key (hyprland-zen--tab-key target)))
+    (hyprland-zen--send `((op . "close-tab")
+                          (key . ,key)))
+    key))
+
+(defun hyprland-zen-workspace-switch (&optional workspace)
+  "Activate WORKSPACE via host command.
+
+When WORKSPACE is nil, prompt from current registry." 
+  (interactive)
+  (let* ((target (or workspace (hyprland-zen--read-workspace "Zen workspace: ")))
+         (key (hyprland-zen--workspace-key target)))
+    (hyprland-zen--send `((op . "activate-workspace")
+                          (key . ,key)))
+    key))
+
+(define-minor-mode hyprland-zen-mode
+  "Keep Zen bridge host process active."
+  :global t
+  :group 'hyprland-zen
+  (if hyprland-zen-mode
+      (hyprland-zen-start)
+    (hyprland-zen-stop)))
+
+(provide 'hyprland-zen)
+;;; hyprland-zen.el ends here
