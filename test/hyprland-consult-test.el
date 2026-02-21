@@ -80,6 +80,29 @@
       (when-let* ((buf (get-buffer hyprland-consult--preview-buffer-name)))
         (kill-buffer buf)))))
 
+(ert-deftest hyprland-consult-test-render-preview-buffer/uses-generic-image-fields ()
+  (let ((buf (get-buffer-create " *hyprland-preview-render*"))
+        inserted-type)
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-images-p)
+                   (lambda () t))
+                  ((symbol-function 'image-type-available-p)
+                   (lambda (type) (eq type 'jpeg)))
+                  ((symbol-function 'create-image)
+                   (lambda (_bytes type _data-p &rest _props)
+                     (setq inserted-type type)
+                     :img))
+                  ((symbol-function 'insert-image)
+                   (lambda (_img)))
+                  ((symbol-function 'image-mode)
+                   #'ignore))
+          (hyprland-consult--render-preview-buffer
+           buf
+           (list :ok t :image-bytes "x" :image-type 'jpeg))
+          (should (eq inserted-type 'jpeg)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 (ert-deftest hyprland-consult-test-cleanup-preview/restores-current-window ()
   (let ((preview (get-buffer-create " *hyprland-preview*"))
         (origin (get-buffer-create " *hyprland-origin*"))

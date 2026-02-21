@@ -68,17 +68,20 @@ return action both receive the same structured value."
     (erase-buffer)
     (pcase (plist-get payload :ok)
       ('t
-       (let ((bytes (plist-get payload :png-bytes)))
+       (let* ((bytes (or (plist-get payload :image-bytes)
+                         (plist-get payload :png-bytes)))
+              (image-type (or (plist-get payload :image-type) 'png)))
          (condition-case err
-             (if (and (display-images-p)
-                      (image-type-available-p 'png))
+             (if (and bytes
+                      (display-images-p)
+                      (image-type-available-p image-type))
                  (progn
                    (set-buffer-multibyte nil)
-                   (insert-image (create-image bytes 'png t :scale 0.45))
+                   (insert-image (create-image bytes image-type t :scale 0.45))
                    (insert "\n"))
-               (insert "Preview image unsupported in current Emacs display\n"))
+               (insert "Preview image unavailable in current Emacs display\n"))
            (error
-            (insert (format "Preview render error: %s\n" (error-message-string err)))))))
+             (insert (format "Preview render error: %s\n" (error-message-string err)))))))
       (_
        (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
     (setq buffer-read-only t)

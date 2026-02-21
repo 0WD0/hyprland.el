@@ -156,6 +156,12 @@ Use tab commands:
 - ~M-x hyprland-zen-workspace-switch~ (activate selected workspace)
 - ~M-x hyprland-zen-open-url~ (open URL in Zen)
 
+Tab switch now supports preview during candidate navigation:
+
+- selection UI uses Consult state callbacks
+- preview requests ~capture-tab~ from host/extension
+- preview image is shown in shared hyprland preview window before confirm
+
 Host protocol (line-delimited JSON, one object per line):
 
 - inbound tab events: ~snapshot~, ~upsert~, ~remove~
@@ -189,6 +195,8 @@ Important options:
 - ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
 - ~hyprland-zen-host-command~: command list used to launch Zen bridge process
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
+- ~hyprland-zen-preview-key~: Consult preview trigger for tab switch
+- ~hyprland-zen-jump-to-window-on-tab-switch~: best-effort Hyprland jump on tab activate
 
 Reconcile defaults (already tuned):
 

@@ -12,6 +12,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'hyprland-base)
+(require 'hyprland-consult)
 
 (defgroup hyprland-zen nil
   "Zen browser integration for hyprland.el."
@@ -42,6 +43,18 @@ browser window ids to Hyprland addresses for explicit `hyprland-jump' fallback."
   :type '(choice (const :tag "Disabled" nil) regexp)
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-preview-key '(:debounce 0.15 any)
+  "Preview trigger configuration passed to `consult--read' for tab selection.
+
+Examples:
+
+- `any': preview on every candidate change.
+- `(:debounce 0.3 any)': delayed auto preview.
+- `M-.': manual preview trigger.
+- nil: disable live preview."
+  :type 'sexp
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -53,11 +66,16 @@ browser window ids to Hyprland addresses for explicit `hyprland-jump' fallback."
 
 (defvar hyprland-zen--process nil)
 (defvar hyprland-zen--fragment "")
+(defvar hyprland-zen--preview-tab-id nil)
 
 (defvar hyprland-zen-after-refresh-hook nil
   "Hook run after Zen tab store changes.")
 
 (declare-function hyprland-jump "hyprland-sync" (address))
+(declare-function hyprland-consult--display-preview "hyprland-consult" (payload))
+(declare-function hyprland-consult--cleanup-preview "hyprland-consult" ())
+(declare-function consult--read "consult" (candidates &rest options))
+(declare-function consult--lookup-cdr "consult" (selected candidates input &rest _))
 
 (defun hyprland-zen--usable-executable-p (path)
   "Return non-nil when PATH points to a non-empty executable file."
@@ -153,6 +171,58 @@ Return non-nil when jump was dispatched."
             (hyprland-jump address)
             t)
         (error nil)))))
+
+(defun hyprland-zen--decode-image-data-url (data-url)
+  "Decode DATA-URL image string into plist `(:bytes :type)'."
+  (when (and (stringp data-url)
+             (string-match "\\`data:image/\\([A-Za-z0-9.+-]+\\);base64,\\(.+\\)\\'" data-url))
+    (let* ((raw-type (downcase (match-string 1 data-url)))
+           (image-type (pcase raw-type
+                         ((or "jpg" "jpeg") 'jpeg)
+                         ("png" 'png)
+                         (_ (intern raw-type))))
+           (body (match-string 2 data-url)))
+      (condition-case _err
+          (list :bytes (base64-decode-string body)
+                :type image-type)
+        (error nil)))))
+
+(defun hyprland-zen--display-preview-message (message)
+  "Display textual preview MESSAGE using shared Consult preview UI."
+  (hyprland-consult--display-preview (list :ok nil :message message)))
+
+(defun hyprland-zen--display-preview-data-url (data-url)
+  "Display image preview from DATA-URL using shared Consult preview UI."
+  (if-let* ((decoded (hyprland-zen--decode-image-data-url data-url)))
+      (hyprland-consult--display-preview
+       (list :ok t
+             :image-bytes (plist-get decoded :bytes)
+             :image-type (plist-get decoded :type)))
+    (hyprland-zen--display-preview-message "Tab preview decode failed")))
+
+(defun hyprland-zen--preview-state (action cand)
+  "Consult state callback for Zen tab preview.
+
+ACTION and CAND follow Consult's :state contract."
+  (pcase action
+    ('setup nil)
+    ('preview
+     (if (not cand)
+         (hyprland-zen--display-preview-message "No tab candidate")
+       (let ((tab-id (hyprland-zen--string (hyprland-zen--field cand 'tab_id))))
+         (if (string-empty-p tab-id)
+             (hyprland-zen--display-preview-message "Candidate missing tab id")
+           (setq hyprland-zen--preview-tab-id tab-id)
+           (hyprland-zen--display-preview-message "Loading tab preview...")
+           (condition-case err
+               (hyprland-zen--send `((op . "capture-tab")
+                                     (tab_id . ,tab-id)))
+             (error
+              (hyprland-zen--display-preview-message
+               (format "Preview request failed: %s" (error-message-string err)))))))))
+    ((or 'exit 'return)
+     (setq hyprland-zen--preview-tab-id nil)
+     (hyprland-consult--cleanup-preview))))
 
 (defun hyprland-zen--workspace-id-from-tab (tab)
   "Extract workspace id from TAB payload."
@@ -408,7 +478,18 @@ Active tabs are sorted first, then by title."
        (remhash key hyprland-zen--workspaces)
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t))
+    ("preview"
+     (let ((tab-id (hyprland-zen--string (hyprland-zen--field message 'tab_id))))
+       (when (and hyprland-zen--preview-tab-id
+                  (string= tab-id hyprland-zen--preview-tab-id))
+         (hyprland-zen--display-preview-data-url
+          (hyprland-zen--string (hyprland-zen--field message 'image_data_url)))
+         t)))
     ("error"
+     (when (and hyprland-zen--preview-tab-id
+                (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
+       (hyprland-zen--display-preview-message
+        (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
      (hyprland--debug "zen host error: %s"
                       (hyprland-zen--string (hyprland-zen--field message 'message) "unknown"))
      nil)
@@ -497,6 +578,8 @@ Active tabs are sorted first, then by title."
   (interactive)
   (when (process-live-p hyprland-zen--process)
     (delete-process hyprland-zen--process))
+  (setq hyprland-zen--preview-tab-id nil)
+  (hyprland-consult--cleanup-preview)
   (setq hyprland-zen--process nil
         hyprland-zen--fragment ""))
 
@@ -524,7 +607,16 @@ Active tabs are sorted first, then by title."
                         tabs)))
     (unless cands
       (user-error "No Zen tabs available"))
-    (cdr (assoc (completing-read prompt cands nil t) cands))))
+    (if (and (fboundp 'consult--read)
+             (fboundp 'consult--lookup-cdr))
+        (consult--read cands
+                       :prompt prompt
+                       :require-match t
+                       :sort nil
+                       :lookup #'consult--lookup-cdr
+                       :preview-key hyprland-zen-preview-key
+                       :state #'hyprland-zen--preview-state)
+      (cdr (assoc (completing-read prompt cands nil t) cands)))))
 
 (defun hyprland-zen--read-workspace (prompt)
   "Read workspace from completion list using PROMPT."
