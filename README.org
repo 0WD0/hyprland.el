@@ -152,3 +152,9 @@ Ensure you opened the special view via ~hyprland-ibuffer-open~ and that
 eask install-deps
 eask test ert test/*.el
 #+end_src
+
+Local runtime smoke test (live Hyprland + hyprctl):
+
+#+begin_src bash
+eask emacs --batch -Q -l scripts/hyprland-local-smoke-test.el
+#+end_src
