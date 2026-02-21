@@ -42,7 +42,7 @@ This profile is used by `hyprland-ibuffer-open-native'."
 (defcustom hyprland-ibuffer-intercept-buffer-open t
   "When non-nil, opening mirror buffers jumps to the real Hyprland window.
 
-This applies to interactive `switch-to-buffer' and `pop-to-buffer' while
+This applies to `switch-to-buffer' and `pop-to-buffer' while
 `hyprland-ibuffer-mirror-mode' is enabled."
   :type 'boolean
   :group 'hyprland-ibuffer)
@@ -160,20 +160,18 @@ This applies to interactive `switch-to-buffer' and `pop-to-buffer' while
     t))
 
 (defun hyprland-ibuffer--advice-switch-to-buffer (orig buffer-or-name &rest args)
-  "Redirect interactive `switch-to-buffer' when BUFFER-OR-NAME is mirror buffer."
+  "Redirect `switch-to-buffer' when BUFFER-OR-NAME is mirror buffer."
   (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
     (if (and hyprland-ibuffer-intercept-buffer-open
-             (called-interactively-p 'interactive)
              buf
              (hyprland-ibuffer--maybe-jump-for-buffer buf))
         (current-buffer)
       (apply orig buffer-or-name args))))
 
 (defun hyprland-ibuffer--advice-pop-to-buffer (orig buffer-or-name &rest args)
-  "Redirect interactive `pop-to-buffer' when BUFFER-OR-NAME is mirror buffer."
+  "Redirect `pop-to-buffer' when BUFFER-OR-NAME is mirror buffer."
   (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
     (if (and hyprland-ibuffer-intercept-buffer-open
-             (called-interactively-p 'interactive)
              buf
              (hyprland-ibuffer--maybe-jump-for-buffer buf))
         (selected-window)

@@ -116,7 +116,7 @@ Important options:
 - ~hyprland-ibuffer-filter-group-name~: display name of Hyprland filter group
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 - ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command
-- ~hyprland-ibuffer-intercept-buffer-open~: redirect interactive open-buffer actions into ~hyprland-jump~
+- ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
 
 Reconcile defaults (already tuned):
 
