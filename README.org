@@ -89,7 +89,7 @@ This view uses Hyprland-focused columns:
 
 - Workspace, Class, Title, Address, PID
 - Killing a Hyprland mirror buffer closes its corresponding Hyprland window
-- Opening a mirror buffer can be redirected to window jump (see customization)
+- During completion preview, mirror buffers render in preview window; confirm/open jumps to real Hyprland window
 
 Inside this ibuffer view, existing ibuffer commands are remapped:
 

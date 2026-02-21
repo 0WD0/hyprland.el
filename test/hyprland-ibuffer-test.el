@@ -169,6 +169,32 @@
             (should-not orig-called)))
       (hyprland-ibuffer-test--kill-buffer-quiet buf))))
 
+(ert-deftest hyprland-ibuffer-test-advice-switch-to-buffer/consult-preview-does-not-jump ()
+  (let ((buf (generate-new-buffer "*hypr-switch-preview*"))
+        jumped
+        previewed
+        orig-called)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0x555"))
+          (cl-letf (((symbol-function 'hyprland-ibuffer--consult-preview-active-p)
+                     (lambda () t))
+                    ((symbol-function 'hyprland-ibuffer--preview-buffer-window)
+                     (lambda (_buf) (setq previewed t) t))
+                    ((symbol-function 'hyprland-jump)
+                     (lambda (_addr) (setq jumped t))))
+            (hyprland-ibuffer--advice-switch-to-buffer
+             (lambda (&rest _args)
+               (setq orig-called t)
+               :orig)
+             buf)
+            (should previewed)
+            (should-not jumped)
+            (should-not orig-called)))
+      (hyprland-ibuffer-test--kill-buffer-quiet buf))))
+
 (ert-deftest hyprland-ibuffer-test-advice-switch-to-buffer/respects-disable-flag ()
   (let ((buf (generate-new-buffer "*hypr-switch-disabled*"))
         orig-called)
@@ -207,6 +233,29 @@
              buf)
             (should (equal jumped "0x333"))
             (should-not orig-called)))
+      (hyprland-ibuffer-test--kill-buffer-quiet buf))))
+
+(ert-deftest hyprland-ibuffer-test-preview-buffer-window/dispatches-preview-request ()
+  (let ((buf (generate-new-buffer "*hypr-preview-window*"))
+        requested-window
+        displayed)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0x666"
+                  hyprland-window-title "T"
+                  hyprland-window-class "C"
+                  hyprland-window-workspace "6"))
+          (cl-letf (((symbol-function 'hyprland-preview-request)
+                     (lambda (window cb)
+                       (setq requested-window window)
+                       (funcall cb (list :ok nil :message "x"))))
+                    ((symbol-function 'hyprland-consult--display-preview)
+                     (lambda (_payload) (setq displayed t))))
+            (should (hyprland-ibuffer--preview-buffer-window buf))
+            (should (equal (alist-get 'address requested-window) "0x666"))
+            (should displayed)))
       (hyprland-ibuffer-test--kill-buffer-quiet buf))))
 
 (ert-deftest hyprland-ibuffer-test-advice-switch-to-buffer/handles-buffer-name ()
