@@ -149,6 +149,72 @@
             (should (equal seen "0xaaa"))))
       (hyprland-ibuffer-test--kill-buffer-quiet buf))))
 
+(ert-deftest hyprland-ibuffer-test-advice-switch-to-buffer/intercepts-interactive-mirror ()
+  (let ((buf (generate-new-buffer "*hypr-switch*"))
+        jumped
+        orig-called)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0x111"))
+          (cl-letf (((symbol-function 'called-interactively-p)
+                     (lambda (&rest _args) t))
+                    ((symbol-function 'hyprland-jump)
+                     (lambda (addr) (setq jumped addr))))
+            (hyprland-ibuffer--advice-switch-to-buffer
+             (lambda (&rest _args)
+               (setq orig-called t)
+               (current-buffer))
+             buf)
+            (should (equal jumped "0x111"))
+            (should-not orig-called)))
+      (hyprland-ibuffer-test--kill-buffer-quiet buf))))
+
+(ert-deftest hyprland-ibuffer-test-advice-switch-to-buffer/respects-disable-flag ()
+  (let ((buf (generate-new-buffer "*hypr-switch-disabled*"))
+        orig-called)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0x222"))
+          (let ((hyprland-ibuffer-intercept-buffer-open nil))
+            (cl-letf (((symbol-function 'called-interactively-p)
+                       (lambda (&rest _args) t))
+                      ((symbol-function 'hyprland-jump)
+                       (lambda (_addr)
+                         (ert-fail "hyprland-jump should not be called when interception is disabled"))))
+              (hyprland-ibuffer--advice-switch-to-buffer
+               (lambda (&rest _args)
+                 (setq orig-called t)
+                 :orig)
+               buf)
+              (should orig-called))))
+      (hyprland-ibuffer-test--kill-buffer-quiet buf))))
+
+(ert-deftest hyprland-ibuffer-test-advice-pop-to-buffer/intercepts-interactive-mirror ()
+  (let ((buf (generate-new-buffer "*hypr-pop*"))
+        jumped
+        orig-called)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0x333"))
+          (cl-letf (((symbol-function 'called-interactively-p)
+                     (lambda (&rest _args) t))
+                    ((symbol-function 'hyprland-jump)
+                     (lambda (addr) (setq jumped addr))))
+            (hyprland-ibuffer--advice-pop-to-buffer
+             (lambda (&rest _args)
+               (setq orig-called t)
+               (selected-window))
+             buf)
+            (should (equal jumped "0x333"))
+            (should-not orig-called)))
+      (hyprland-ibuffer-test--kill-buffer-quiet buf))))
+
 (ert-deftest hyprland-ibuffer-test-ibuffer-row-jump-dispatches ()
   (let* ((mirror (get-buffer-create "*hypr-mirror*"))
          (ibuf (get-buffer-create "*hypr-ibuf*"))
