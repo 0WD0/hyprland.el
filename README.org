@@ -98,9 +98,11 @@ Important options:
 - ~hyprland-preview-sensitive-regexp~: skip screenshot preview for matching windows
 - ~hyprland-preview-cache-mode~: ~memory-only~ (default) or ~disk~
 - ~hyprland-preview-cache-directory~: cache directory when using disk mode
+- ~hyprland-preview-cache-max-entries~ / ~hyprland-preview-cache-max-bytes~: in-memory preview cache bounds
 - ~hyprland-preview-capture-backend~: ~auto~ (default), ~toplevel~, or ~grim~
 - ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
 - ~hyprland-preview-focus-for-accurate-capture~: default ~nil~ (avoid focus flicker); set ~t~ only if you prefer aggressive grim fallback accuracy
+- ~hyprland-consult-preview-debounce-ms~: debounce for preview generation while typing in Consult
 
 Reconcile defaults (already tuned):
 

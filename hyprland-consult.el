@@ -19,6 +19,14 @@
 (defvar hyprland-consult--preview-buffer-name " *hyprland-preview*")
 (defvar hyprland-consult--candidate-table nil
   "Hash table from candidate label to Hyprland window object.")
+(defvar hyprland-consult--preview-timer nil)
+(defvar hyprland-consult--preview-token 0)
+(defvar hyprland-consult--last-preview-label nil)
+
+(defcustom hyprland-consult-preview-debounce-ms 120
+  "Idle delay before firing a preview capture request."
+  :type 'integer
+  :group 'hyprland)
 
 (defun hyprland-consult--window-label (window)
   "Build candidate display label from WINDOW alist."
@@ -87,6 +95,41 @@ function also falls back to hash-based label lookup."
       (quit-window nil win))
     (kill-buffer buf)))
 
+(defun hyprland-consult--cancel-preview-timer ()
+  "Cancel pending preview debounce timer, if any."
+  (when (timerp hyprland-consult--preview-timer)
+    (cancel-timer hyprland-consult--preview-timer))
+  (setq hyprland-consult--preview-timer nil))
+
+(defun hyprland-consult--schedule-preview (cand)
+  "Schedule debounced preview request for candidate CAND."
+  (hyprland-consult--cancel-preview-timer)
+  (let ((token hyprland-consult--preview-token))
+    (setq hyprland-consult--preview-timer
+          (run-with-timer
+           (max 0.0 (/ (max 0 hyprland-consult-preview-debounce-ms) 1000.0))
+           nil
+           (lambda ()
+             (setq hyprland-consult--preview-timer nil)
+             (when (= token hyprland-consult--preview-token)
+               (let ((label (and (stringp cand) (substring-no-properties cand))))
+                 (unless (equal label hyprland-consult--last-preview-label)
+                   (setq hyprland-consult--last-preview-label label)
+                   (if-let* ((window (hyprland-consult--window-from-candidate cand)))
+                       (hyprland-preview-request
+                        window
+                        (lambda (payload)
+                          (when (= token hyprland-consult--preview-token)
+                            (hyprland-consult--display-preview payload))))
+                     (hyprland-consult--display-preview
+                      (list :ok nil :message "Preview metadata missing for candidate")))))))))))
+
+(defun hyprland-consult--reset-preview-state ()
+  "Reset transient preview state for one Consult session."
+  (hyprland-consult--cancel-preview-timer)
+  (setq hyprland-consult--last-preview-label nil)
+  (cl-incf hyprland-consult--preview-token))
+
 (defun hyprland-consult--state (action cand)
   "Consult state callback for Hyprland preview.
 
@@ -94,19 +137,19 @@ ACTION and CAND follow Consult's :state contract.
 This function intentionally handles the direct callback form
 `(state action cand)'."
   (pcase action
-    ('setup nil)
+    ('setup
+     (hyprland-consult--reset-preview-state)
+     nil)
     ('preview
-     (if cand
-         (if-let* ((window (hyprland-consult--window-from-candidate cand)))
-             (hyprland-preview-request
-              window
-              (lambda (payload)
-                (hyprland-consult--display-preview payload)))
-           (hyprland-consult--display-preview
-            (list :ok nil :message "Preview metadata missing for candidate")))))
+     (when cand
+       (hyprland-consult--schedule-preview cand)))
     ('exit
+     (hyprland-consult--reset-preview-state)
+     (hyprland-preview-cancel)
      (hyprland-consult--cleanup-preview))
     ('return
+     (hyprland-consult--reset-preview-state)
+     (hyprland-preview-cancel)
      (hyprland-consult--cleanup-preview))))
 
 (defun hyprland--select-window-candidate ()

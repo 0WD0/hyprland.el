@@ -14,6 +14,7 @@
 
 (defvar hyprland-preview--grim-supports-target nil)
 (defvar hyprland-preview--cache (make-hash-table :test #'equal))
+(defvar hyprland-preview--cache-bytes 0)
 (defvar hyprland-preview--active-process nil)
 (defvar hyprland-preview--active-token 0)
 (defvar hyprland-preview--active-restore-address nil)
@@ -44,6 +45,20 @@
   :type 'integer
   :group 'hyprland)
 
+(defcustom hyprland-preview-cache-max-entries 24
+  "Maximum number of in-memory preview entries.
+
+Older entries are evicted first when the limit is exceeded."
+  :type 'integer
+  :group 'hyprland)
+
+(defcustom hyprland-preview-cache-max-bytes (* 64 1024 1024)
+  "Maximum total bytes kept in the in-memory preview cache.
+
+Older entries are evicted first when the limit is exceeded."
+  :type 'integer
+  :group 'hyprland)
+
 (defcustom hyprland-preview-focus-for-accurate-capture nil
   "When non-nil, temporarily focus hidden/off-workspace window before capture.
 
@@ -66,6 +81,7 @@ window briefly and restoring prior focus after capture."
   "Clear in-memory preview cache and optional disk cache files."
   (interactive)
   (clrhash hyprland-preview--cache)
+  (setq hyprland-preview--cache-bytes 0)
   (when (and (eq hyprland-preview-cache-mode 'disk)
              (file-directory-p hyprland-preview-cache-directory))
     (dolist (f (directory-files hyprland-preview-cache-directory t "\\`[^.]"))
@@ -122,15 +138,47 @@ WINDOW should contain alist fields `at' and `size' as two-element lists."
 
 (defun hyprland-preview--cache-get (key)
   "Return cached preview data for KEY if still fresh."
-  (when-let* ((entry (gethash key hyprland-preview--cache))
-              (age (- (hyprland-preview--now) (plist-get entry :ts)))
-              (_ (<= age hyprland-preview-ttl-seconds)))
-    (plist-get entry :png-bytes)))
+  (when-let* ((entry (gethash key hyprland-preview--cache)))
+    (if (<= (- (hyprland-preview--now) (plist-get entry :ts)) hyprland-preview-ttl-seconds)
+        (plist-get entry :png-bytes)
+      (remhash key hyprland-preview--cache)
+      (setq hyprland-preview--cache-bytes
+            (max 0 (- hyprland-preview--cache-bytes (or (plist-get entry :bytes) 0))))
+      nil)))
+
+(defun hyprland-preview--cache-prune ()
+  "Evict stale/old entries to enforce memory cache bounds."
+  (let ((now (hyprland-preview--now))
+        (entries nil))
+    (maphash
+     (lambda (key entry)
+       (if (> (- now (plist-get entry :ts)) hyprland-preview-ttl-seconds)
+           (progn
+             (remhash key hyprland-preview--cache)
+             (setq hyprland-preview--cache-bytes
+                   (max 0 (- hyprland-preview--cache-bytes (or (plist-get entry :bytes) 0)))))
+         (push (list key (plist-get entry :ts) (or (plist-get entry :bytes) 0)) entries)))
+     hyprland-preview--cache)
+    (setq entries (sort entries (lambda (a b) (< (nth 1 a) (nth 1 b)))))
+    (while (and entries
+                (or (> (hash-table-count hyprland-preview--cache) (max 1 hyprland-preview-cache-max-entries))
+                    (> hyprland-preview--cache-bytes (max 1 hyprland-preview-cache-max-bytes))))
+      (let* ((item (pop entries))
+             (key (nth 0 item))
+             (bytes (nth 2 item)))
+        (remhash key hyprland-preview--cache)
+        (setq hyprland-preview--cache-bytes (max 0 (- hyprland-preview--cache-bytes bytes)))))))
 
 (defun hyprland-preview--cache-put (key png-bytes)
   "Store PNG-BYTES in cache under KEY."
-  (puthash key (list :ts (hyprland-preview--now) :png-bytes png-bytes)
-           hyprland-preview--cache)
+  (when-let* ((old (gethash key hyprland-preview--cache)))
+    (setq hyprland-preview--cache-bytes
+          (max 0 (- hyprland-preview--cache-bytes (or (plist-get old :bytes) 0)))))
+  (let ((bytes (string-bytes png-bytes)))
+    (puthash key (list :ts (hyprland-preview--now) :bytes bytes :png-bytes png-bytes)
+             hyprland-preview--cache)
+    (setq hyprland-preview--cache-bytes (+ hyprland-preview--cache-bytes bytes)))
+  (hyprland-preview--cache-prune)
   (when (eq hyprland-preview-cache-mode 'disk)
     (make-directory hyprland-preview-cache-directory t)
     (set-file-modes hyprland-preview-cache-directory #o700)
@@ -204,6 +252,11 @@ Signal an error if neither mode can be formed."
     (delete-process hyprland-preview--active-process))
   (setq hyprland-preview--active-process nil)
   (hyprland-preview--restore-focus))
+
+(defun hyprland-preview-cancel ()
+  "Cancel the active preview request and invalidate in-flight callbacks."
+  (hyprland-preview--cancel-active-process)
+  (cl-incf hyprland-preview--active-token))
 
 (defun hyprland-preview--active-window-address ()
   "Return normalized address for current active window, or nil."
