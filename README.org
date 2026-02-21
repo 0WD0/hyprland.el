@@ -161,6 +161,7 @@ Tab switch now supports preview during candidate navigation:
 - selection UI uses Consult state callbacks
 - preview requests ~capture-tab~ from host/extension
 - preview image is shown in shared hyprland preview window before confirm
+- when target tab is hidden by workspace state, extension attempts ~tabs.show~ before activation
 
 Host protocol (line-delimited JSON, one object per line):
 

@@ -37,6 +37,7 @@ function tabPayload(tab) {
     audible: !!tab.audible,
     pinned: !!tab.pinned,
     active: !!tab.active,
+    hidden: !!tab.hidden,
     discarded: !!tab.discarded,
     cookie_store_id: cookieStoreId,
     status: tab.status || "",
@@ -152,9 +153,19 @@ async function handleOp(message) {
     case "activate-tab":
       {
         const tabId = parseTabIdFromMessage(message);
-        const tab = await browser.tabs.get(tabId);
+        let tab = await browser.tabs.get(tabId);
         await browser.windows.update(tab.windowId, { focused: true });
+        if (tab.hidden) {
+          try {
+            await browser.tabs.show(tabId);
+            tab = await browser.tabs.get(tabId);
+          } catch (err) {
+            sendError("activate-tab-show", err?.message || String(err));
+          }
+        }
         await browser.tabs.update(tabId, { active: true });
+        tab = await browser.tabs.get(tabId);
+        send({ type: "upsert", tab: tabPayload(tab) });
       }
       break;
     case "close-tab":

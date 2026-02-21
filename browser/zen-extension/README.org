@@ -71,6 +71,11 @@ Native-host executables live in:
   - ~activate-tab~, ~close-tab~, ~open-url~
   - ~activate-workspace~, ~capture-tab~, ~ping~
 
+Tab activation behavior:
+
+- focus target browser window first
+- if target tab is hidden, attempt ~tabs.show(tabId)~ before ~tabs.update(...active=true)~
+
 * Zen sync-window note
 
 Zen sync-window/workspace internals (for example internal workspace UUID and
