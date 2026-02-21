@@ -21,11 +21,6 @@
   "Ibuffer integration for hyprland.el."
   :group 'hyprland)
 
-(defcustom hyprland-ibuffer-auto-filter-group t
-  "When non-nil, add a dedicated Hyprland filter group in ibuffer buffers."
-  :type 'boolean
-  :group 'hyprland-ibuffer)
-
 (defcustom hyprland-ibuffer-filter-group-name "Hyprland"
   "Name of the ibuffer filter group used for mirrored Hyprland buffers."
   :type 'string
@@ -127,25 +122,14 @@ This profile is used by `hyprland-ibuffer-open-native'."
       (append groups (list (hyprland-ibuffer--filter-group-spec)))
     (cons (hyprland-ibuffer--filter-group-spec) groups)))
 
-(defun hyprland-ibuffer--ensure-filter-group ()
-  "Ensure current ibuffer buffer has a dedicated Hyprland filter group."
-  (when (and hyprland-ibuffer-auto-filter-group
-             (derived-mode-p 'ibuffer-mode))
-    (require 'ibuf-ext nil t)
-    (when (boundp 'ibuffer-filter-groups)
-      (let* ((name hyprland-ibuffer-filter-group-name)
-             (groups (or ibuffer-filter-groups nil)))
-        (unless (assoc name groups)
-          (setq-local ibuffer-filter-groups
-                      (hyprland-ibuffer--insert-group groups))
-          (ibuffer-update nil t))))))
-
 (defun hyprland-ibuffer-install-saved-filter-group ()
   "Install Hyprland group into `ibuffer-saved-filter-groups' profile.
 
 This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
   (interactive)
   (require 'ibuf-ext)
+  (unless (boundp 'ibuffer-saved-filter-groups)
+    (setq ibuffer-saved-filter-groups nil))
   (let* ((profile hyprland-ibuffer-saved-filter-group-profile)
          (entry (assoc profile ibuffer-saved-filter-groups))
          (groups (if entry (copy-tree (cdr entry)) nil))
@@ -156,23 +140,6 @@ This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
       (push (cons profile groups) ibuffer-saved-filter-groups))
     (message "Installed Hyprland ibuffer saved filter profile: %s" profile)))
 
-(defun hyprland-ibuffer--remove-filter-group ()
-  "Remove Hyprland filter group from current ibuffer buffer, if present."
-  (when (and (derived-mode-p 'ibuffer-mode)
-             (boundp 'ibuffer-filter-groups))
-    (let ((new-groups (assoc-delete-all hyprland-ibuffer-filter-group-name
-                                        (or ibuffer-filter-groups nil))))
-      (unless (equal new-groups ibuffer-filter-groups)
-        (setq-local ibuffer-filter-groups new-groups)
-        (ibuffer-update nil t)))))
-
-(defun hyprland-ibuffer--map-open-ibuffers (fn)
-  "Run FN in each live ibuffer buffer."
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p 'ibuffer-mode)
-          (funcall fn))))))
 
 (defun hyprland-ibuffer--render-buffer (buffer window)
   "Render WINDOW metadata into BUFFER and update local state."
@@ -252,18 +219,6 @@ This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
   (hyprland-tag hyprland-window-address tag-op))
 
 (defun hyprland-ibuffer-open ()
-  "Open ibuffer filtered to Hyprland mirror buffers."
-  (interactive)
-  (ibuffer nil "*Ibuffer-hyprland*")
-  (when-let* ((buf (get-buffer "*Ibuffer-hyprland*")))
-    (with-current-buffer buf
-      (ibuffer-filter-disable)
-      (ibuffer-filter-by-derived-mode 'hyprland-window-buffer-mode)
-      (hyprland-ibuffer--apply-formats)
-      (hyprland-ibuffer-view-mode 1)
-      (ibuffer-update nil t))))
-
-(defun hyprland-ibuffer-open-native ()
   "Open ibuffer using native saved filter-group profile for Hyprland.
 
 This command relies on `ibuffer-saved-filter-groups' and
@@ -279,6 +234,11 @@ This command relies on `ibuffer-saved-filter-groups' and
       (hyprland-ibuffer--apply-formats)
       (hyprland-ibuffer-view-mode 1)
       (ibuffer-update nil t))))
+
+(defun hyprland-ibuffer-open-native ()
+  "Backward-compatible alias for `hyprland-ibuffer-open'."
+  (interactive)
+  (hyprland-ibuffer-open))
 
 (defun hyprland-ibuffer--mirror-buffer-at-point ()
   "Return Hyprland mirror buffer represented by current ibuffer row."
@@ -347,12 +307,8 @@ Hyprland ibuffer view to preserve ibuffer muscle memory."
   (if hyprland-ibuffer-mirror-mode
       (progn
         (add-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
-        (add-hook 'ibuffer-mode-hook #'hyprland-ibuffer--ensure-filter-group)
-        (hyprland-ibuffer--map-open-ibuffers #'hyprland-ibuffer--ensure-filter-group)
         (ignore-errors (hyprland-ibuffer-sync-buffers)))
-    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
-    (remove-hook 'ibuffer-mode-hook #'hyprland-ibuffer--ensure-filter-group)
-    (hyprland-ibuffer--map-open-ibuffers #'hyprland-ibuffer--remove-filter-group)))
+    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)))
 
 (provide 'hyprland-ibuffer)
 ;;; hyprland-ibuffer.el ends here

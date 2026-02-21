@@ -8,6 +8,8 @@
 (require 'cl-lib)
 (require 'hyprland-ibuffer)
 
+(defvar ibuffer-saved-filter-groups nil)
+
 (defun hyprland-ibuffer-test--with-clean-state (fn)
   "Run FN with isolated ibuffer mirror state and cleanup."
   (let ((hyprland-ibuffer--address->buffer (make-hash-table :test #'equal))
@@ -134,7 +136,7 @@
 
 (ert-deftest hyprland-ibuffer-test-open-applies-custom-formats ()
   (let ((ibuf (get-buffer-create "*Ibuffer-hyprland*"))
-        captured)
+        captured switched installed)
     (unwind-protect
         (progn
           (with-current-buffer ibuf
@@ -145,11 +147,17 @@
                        (with-current-buffer ibuf
                          (ibuffer-mode))
                        ibuf))
-                    ((symbol-function 'ibuffer-filter-disable) #'ignore)
-                    ((symbol-function 'ibuffer-filter-by-derived-mode) #'ignore)
+                    ((symbol-function 'require)
+                     (lambda (&rest _args) t))
+                    ((symbol-function 'hyprland-ibuffer-install-saved-filter-group)
+                     (lambda () (setq installed t)))
+                    ((symbol-function 'ibuffer-switch-to-saved-filter-groups)
+                     (lambda (name) (setq switched name)))
                     ((symbol-function 'ibuffer-update) #'ignore))
             (hyprland-ibuffer-open)
             (should captured)
+            (should installed)
+            (should (equal switched hyprland-ibuffer-saved-filter-group-profile))
             (with-current-buffer ibuf
               (should hyprland-ibuffer-view-mode)
               (should (local-variable-p 'ibuffer-formats))
@@ -160,54 +168,12 @@
                 (should (member '(hypr-address 16 16 :left) fmt))))))
       (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
 
-(ert-deftest hyprland-ibuffer-test-ensure-filter-group/add-once ()
-  (let ((ibuf (get-buffer-create "*hypr-ibuf-groups*"))
-        (updates 0)
-        (hyprland-ibuffer-auto-filter-group t)
-        (hyprland-ibuffer-filter-group-name "Hyprland")
-        (hyprland-ibuffer-filter-group-position 'prepend))
-    (unwind-protect
-        (with-current-buffer ibuf
-          (ibuffer-mode)
-          (setq-local ibuffer-filter-groups
-                      '(("Default" (predicate . identity))))
-          (cl-letf (((symbol-function 'ibuffer-update)
-                     (lambda (&rest _args) (cl-incf updates))))
-            (hyprland-ibuffer--ensure-filter-group)
-            (hyprland-ibuffer--ensure-filter-group))
-          (should (= updates 1))
-          (should (equal (caar ibuffer-filter-groups) "Hyprland"))
-          (should (= (cl-count-if (lambda (g)
-                                    (equal (car g) "Hyprland"))
-                                  ibuffer-filter-groups)
-                     1)))
-      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
-
-(ert-deftest hyprland-ibuffer-test-remove-filter-group ()
-  (let ((ibuf (get-buffer-create "*hypr-ibuf-remove*"))
-        (updates 0)
-        (hyprland-ibuffer-filter-group-name "Hyprland"))
-    (unwind-protect
-        (with-current-buffer ibuf
-          (ibuffer-mode)
-          (setq-local ibuffer-filter-groups
-                      '(("Hyprland" (mode . hyprland-window-buffer-mode))
-                        ("Default" (predicate . identity))))
-          (cl-letf (((symbol-function 'ibuffer-update)
-                     (lambda (&rest _args) (cl-incf updates))))
-            (hyprland-ibuffer--remove-filter-group))
-          (should (= updates 1))
-          (should-not (assoc "Hyprland" ibuffer-filter-groups)))
-      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
-
 (ert-deftest hyprland-ibuffer-test-install-saved-filter-group/creates-profile ()
   (let ((ibuffer-saved-filter-groups nil)
         (hyprland-ibuffer-saved-filter-group-profile "hyprland")
         (hyprland-ibuffer-filter-group-name "Hyprland")
         (hyprland-ibuffer-filter-group-position 'prepend))
-    (cl-letf (((symbol-function 'require)
-               (lambda (&rest _args) t))
-              ((symbol-function 'message) #'ignore))
+    (cl-letf (((symbol-function 'message) #'ignore))
       (hyprland-ibuffer-install-saved-filter-group)
       (let* ((entry (assoc "hyprland" ibuffer-saved-filter-groups))
              (group (car (cdr entry))))
@@ -224,9 +190,7 @@
         (hyprland-ibuffer-saved-filter-group-profile "hyprland")
         (hyprland-ibuffer-filter-group-name "Hyprland")
         (hyprland-ibuffer-filter-group-position 'prepend))
-    (cl-letf (((symbol-function 'require)
-               (lambda (&rest _args) t))
-              ((symbol-function 'message) #'ignore))
+    (cl-letf (((symbol-function 'message) #'ignore))
       (hyprland-ibuffer-install-saved-filter-group)
       (let* ((entry (assoc "hyprland" ibuffer-saved-filter-groups))
              (groups (cdr entry))
@@ -237,26 +201,11 @@
                        '(mode . hyprland-window-buffer-mode)))))))
 
 (ert-deftest hyprland-ibuffer-test-open-native/switches-saved-profile ()
-  (let ((ibuf (get-buffer-create "*Ibuffer-hyprland*"))
-        installed switched)
-    (unwind-protect
-        (progn
-          (with-current-buffer ibuf
-            (ibuffer-mode))
-          (cl-letf (((symbol-function 'ibuffer)
-                     (lambda (&optional _name _bufname)
-                       (with-current-buffer ibuf
-                         (ibuffer-mode))
-                       ibuf))
-                    ((symbol-function 'hyprland-ibuffer-install-saved-filter-group)
-                     (lambda () (setq installed t)))
-                    ((symbol-function 'ibuffer-switch-to-saved-filter-groups)
-                     (lambda (name) (setq switched name)))
-                    ((symbol-function 'ibuffer-update) #'ignore))
-            (hyprland-ibuffer-open-native)
-            (should installed)
-            (should (equal switched hyprland-ibuffer-saved-filter-group-profile))))
-      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
+  (let (called)
+    (cl-letf (((symbol-function 'hyprland-ibuffer-open)
+               (lambda () (setq called t))))
+      (hyprland-ibuffer-open-native)
+      (should called))))
 
 (provide 'hyprland-ibuffer-test)
 ;;; hyprland-ibuffer-test.el ends here
