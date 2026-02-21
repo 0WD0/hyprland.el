@@ -55,6 +55,11 @@ Examples:
   :type 'sexp
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-initial-sync-timeout 1.5
+  "Seconds to wait for initial tab snapshot when local store is empty."
+  :type 'number
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -223,6 +228,45 @@ ACTION and CAND follow Consult's :state contract."
     ((or 'exit 'return)
      (setq hyprland-zen--preview-tab-id nil)
      (hyprland-consult--cleanup-preview))))
+
+(defun hyprland-zen--wait-for-tabs (&optional timeout)
+  "Wait up to TIMEOUT seconds for tab store to populate, then return tabs list."
+  (let ((deadline (+ (float-time) (or timeout hyprland-zen-initial-sync-timeout)))
+        tabs)
+    (while (and (null (setq tabs (hyprland-zen-tabs)))
+                (hyprland-zen-running-p)
+                (< (float-time) deadline))
+      (accept-process-output hyprland-zen--process 0.1))
+    tabs))
+
+(defun hyprland-zen--ensure-tabs-ready ()
+  "Ensure host is running and attempt to populate tab snapshot.
+
+Return current tab list (possibly empty)."
+  (unless (hyprland-zen-running-p)
+    (hyprland-zen-start))
+  (or (hyprland-zen-tabs)
+      (progn
+        (hyprland-zen-refresh)
+        (hyprland-zen-refresh-workspaces)
+        (hyprland-zen--wait-for-tabs))))
+
+(defun hyprland-zen--ensure-workspaces-ready ()
+  "Ensure host is running and attempt to populate workspace snapshot.
+
+Return current workspace list (possibly empty)."
+  (unless (hyprland-zen-running-p)
+    (hyprland-zen-start))
+  (or (hyprland-zen-workspaces)
+      (progn
+        (hyprland-zen-refresh-workspaces)
+        (let ((deadline (+ (float-time) hyprland-zen-initial-sync-timeout))
+              spaces)
+          (while (and (null (setq spaces (hyprland-zen-workspaces)))
+                      (hyprland-zen-running-p)
+                      (< (float-time) deadline))
+            (accept-process-output hyprland-zen--process 0.1))
+          spaces))))
 
 (defun hyprland-zen--workspace-id-from-tab (tab)
   "Extract workspace id from TAB payload."
@@ -601,12 +645,12 @@ Active tabs are sorted first, then by title."
 
 (defun hyprland-zen--read-tab (prompt)
   "Read tab from completion list using PROMPT."
-  (let* ((tabs (hyprland-zen-tabs))
+  (let* ((tabs (hyprland-zen--ensure-tabs-ready))
          (cands (mapcar (lambda (tab)
                           (cons (hyprland-zen--tab-label tab) tab))
                         tabs)))
     (unless cands
-      (user-error "No Zen tabs available"))
+      (user-error "No Zen tabs available (bridge disconnected or extension not ready)"))
     (if (and (fboundp 'consult--read)
              (fboundp 'consult--lookup-cdr))
         (consult--read cands
@@ -620,12 +664,12 @@ Active tabs are sorted first, then by title."
 
 (defun hyprland-zen--read-workspace (prompt)
   "Read workspace from completion list using PROMPT."
-  (let* ((workspaces (hyprland-zen-workspaces))
+  (let* ((workspaces (hyprland-zen--ensure-workspaces-ready))
          (cands (mapcar (lambda (workspace)
                           (cons (hyprland-zen--workspace-label workspace) workspace))
                         workspaces)))
     (unless cands
-      (user-error "No Zen workspaces available"))
+      (user-error "No Zen workspaces available (bridge disconnected or extension not ready)"))
     (cdr (assoc (completing-read prompt cands nil t) cands))))
 
 (defun hyprland-zen-tab-switch (&optional tab)

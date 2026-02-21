@@ -76,6 +76,11 @@ Tab activation behavior:
 - focus target browser window first
 - if target tab is hidden, attempt ~tabs.show(tabId)~ before ~tabs.update(...active=true)~
 
+Connection behavior:
+
+- extension auto-retries native host connection
+- on successful connect, extension immediately pushes ~snapshot~ and ~workspace_snapshot~
+
 * Zen sync-window note
 
 Zen sync-window/workspace internals (for example internal workspace UUID and

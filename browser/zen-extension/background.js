@@ -2,8 +2,10 @@
 
 const HOST_NAME = "hyprland_zen_bridge";
 const ENABLE_CONSOLE_FALLBACK = true;
+const RECONNECT_DELAY_MS = 1500;
 
 let nativePort = null;
+let reconnectTimer = null;
 
 function workspaceKey(tab) {
   const container = tab.cookieStoreId || "default";
@@ -201,6 +203,17 @@ function onNativeMessage(message) {
 
 function onNativeDisconnect() {
   nativePort = null;
+  scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  if (nativePort || reconnectTimer) {
+    return;
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectNative();
+  }, RECONNECT_DELAY_MS);
 }
 
 function wireTabEvents() {
@@ -235,9 +248,16 @@ function connectNative() {
     nativePort = browser.runtime.connectNative(HOST_NAME);
     nativePort.onMessage.addListener(onNativeMessage);
     nativePort.onDisconnect.addListener(onNativeDisconnect);
+    sendSnapshot().catch((err) => {
+      sendError("list-tabs", err?.message || String(err));
+    });
+    sendWorkspaceSnapshot().catch((err) => {
+      sendError("list-workspaces", err?.message || String(err));
+    });
   } catch (err) {
     nativePort = null;
     sendError("connect-native", err?.message || String(err));
+    scheduleReconnect();
   }
 }
 

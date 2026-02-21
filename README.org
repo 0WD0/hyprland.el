@@ -162,6 +162,7 @@ Tab switch now supports preview during candidate navigation:
 - preview requests ~capture-tab~ from host/extension
 - preview image is shown in shared hyprland preview window before confirm
 - when target tab is hidden by workspace state, extension attempts ~tabs.show~ before activation
+- when local tab cache is empty, Emacs auto-starts host, refreshes, and waits briefly before failing
 
 Host protocol (line-delimited JSON, one object per line):
 
@@ -173,6 +174,10 @@ Limitations from current Zen WebExtension surface:
 
 - Zen internal workspace UUID and synced-window identity are not exposed to WebExtensions.
 - Current mapping uses public fields (~windowId~, ~cookieStoreId~) and emits ~sync_group~ as a heuristic (~container:<cookieStoreId>~).
+
+If you still hit ~No Zen tabs available~, it usually means bridge is not connected yet.
+Current behavior retries connection and requests snapshots automatically, then surfaces
+an explicit bridge-not-ready error when timeout is reached.
 
 * Customization
 
