@@ -20,6 +20,9 @@
 (defvar hyprland-sync--socket-fragment "")
 (defvar hyprland-sync--started nil)
 
+(defvar hyprland-after-refresh-hook nil
+  "Hook run after `hyprland-refresh' replaces the in-memory window store.")
+
 (defconst hyprland-sync--address-events
   '(openwindow closewindow windowtitlev2 movewindowv2 changefloatingmode pin)
   "Events carrying a directly parseable address token.")
@@ -63,7 +66,8 @@
     (hyprland-sync--clear-store)
     (dolist (w windows)
       (hyprland-sync--store-window w))
-    (hyprland--debug "snapshot windows=%d" (hash-table-count hyprland-sync--windows))))
+    (hyprland--debug "snapshot windows=%d" (hash-table-count hyprland-sync--windows))
+    (run-hooks 'hyprland-after-refresh-hook)))
 
 (defun hyprland-sync--split-event-line (line)
   "Parse socket LINE into (:name event-symbol :payload raw-data).
