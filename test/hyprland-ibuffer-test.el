@@ -160,5 +160,45 @@
                 (should (member '(hypr-address 16 16 :left) fmt))))))
       (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
 
+(ert-deftest hyprland-ibuffer-test-ensure-filter-group/add-once ()
+  (let ((ibuf (get-buffer-create "*hypr-ibuf-groups*"))
+        (updates 0)
+        (hyprland-ibuffer-auto-filter-group t)
+        (hyprland-ibuffer-filter-group-name "Hyprland")
+        (hyprland-ibuffer-filter-group-position 'prepend))
+    (unwind-protect
+        (with-current-buffer ibuf
+          (ibuffer-mode)
+          (setq-local ibuffer-filter-groups
+                      '(("Default" (predicate . identity))))
+          (cl-letf (((symbol-function 'ibuffer-update)
+                     (lambda (&rest _args) (cl-incf updates))))
+            (hyprland-ibuffer--ensure-filter-group)
+            (hyprland-ibuffer--ensure-filter-group))
+          (should (= updates 1))
+          (should (equal (caar ibuffer-filter-groups) "Hyprland"))
+          (should (= (cl-count-if (lambda (g)
+                                    (equal (car g) "Hyprland"))
+                                  ibuffer-filter-groups)
+                     1)))
+      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
+
+(ert-deftest hyprland-ibuffer-test-remove-filter-group ()
+  (let ((ibuf (get-buffer-create "*hypr-ibuf-remove*"))
+        (updates 0)
+        (hyprland-ibuffer-filter-group-name "Hyprland"))
+    (unwind-protect
+        (with-current-buffer ibuf
+          (ibuffer-mode)
+          (setq-local ibuffer-filter-groups
+                      '(("Hyprland" (mode . hyprland-window-buffer-mode))
+                        ("Default" (predicate . identity))))
+          (cl-letf (((symbol-function 'ibuffer-update)
+                     (lambda (&rest _args) (cl-incf updates))))
+            (hyprland-ibuffer--remove-filter-group))
+          (should (= updates 1))
+          (should-not (assoc "Hyprland" ibuffer-filter-groups)))
+      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
+
 (provide 'hyprland-ibuffer-test)
 ;;; hyprland-ibuffer-test.el ends here

@@ -84,6 +84,8 @@ Open Hyprland-only ibuffer view:
 This view uses Hyprland-focused columns:
 
 - Workspace, Class, Title, Address, PID
+- In regular ~*Ibuffer*~, Hyprland mirror buffers are auto-grouped under a
+  dedicated filter group (default: "Hyprland").
 
 Inside this ibuffer view, existing ibuffer commands are remapped:
 
@@ -107,6 +109,9 @@ Important options:
 - ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
 - ~hyprland-preview-focus-for-accurate-capture~: default ~nil~ (avoid focus flicker); set ~t~ only if you prefer aggressive grim fallback accuracy
 - ~hyprland-consult-preview-key~: Consult preview trigger (e.g. ~any~, ~(:debounce 0.3 any)~, ~"M-."~, or ~nil~)
+- ~hyprland-ibuffer-auto-filter-group~: enable/disable auto "Hyprland" group in ibuffer
+- ~hyprland-ibuffer-filter-group-name~: display name of Hyprland filter group
+- ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 
 Reconcile defaults (already tuned):
 

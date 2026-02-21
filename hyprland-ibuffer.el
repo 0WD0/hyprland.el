@@ -18,6 +18,22 @@
   "Ibuffer integration for hyprland.el."
   :group 'hyprland)
 
+(defcustom hyprland-ibuffer-auto-filter-group t
+  "When non-nil, add a dedicated Hyprland filter group in ibuffer buffers."
+  :type 'boolean
+  :group 'hyprland-ibuffer)
+
+(defcustom hyprland-ibuffer-filter-group-name "Hyprland"
+  "Name of the ibuffer filter group used for mirrored Hyprland buffers."
+  :type 'string
+  :group 'hyprland-ibuffer)
+
+(defcustom hyprland-ibuffer-filter-group-position 'prepend
+  "Where to insert the Hyprland filter group in `ibuffer-filter-groups'."
+  :type '(choice (const :tag "At beginning" prepend)
+          (const :tag "At end" append))
+  :group 'hyprland-ibuffer)
+
 (defvar hyprland-ibuffer--address->buffer (make-hash-table :test #'equal)
   "Map normalized window addresses to mirror buffers.")
 
@@ -89,6 +105,44 @@
      ((and (listp ws) (alist-get 'name ws)) (format "%s" (alist-get 'name ws)))
      ((and (listp ws) (alist-get 'id ws)) (format "%s" (alist-get 'id ws)))
      (t "?"))))
+
+(defun hyprland-ibuffer--filter-group-spec ()
+  "Return ibuffer filter group definition for Hyprland mirror buffers."
+  (list hyprland-ibuffer-filter-group-name
+        '(mode . hyprland-window-buffer-mode)))
+
+(defun hyprland-ibuffer--ensure-filter-group ()
+  "Ensure current ibuffer buffer has a dedicated Hyprland filter group."
+  (when (and hyprland-ibuffer-auto-filter-group
+             (derived-mode-p 'ibuffer-mode))
+    (require 'ibuf-ext nil t)
+    (when (boundp 'ibuffer-filter-groups)
+      (let* ((name hyprland-ibuffer-filter-group-name)
+             (groups (or ibuffer-filter-groups nil)))
+        (unless (assoc name groups)
+          (setq-local ibuffer-filter-groups
+                      (if (eq hyprland-ibuffer-filter-group-position 'append)
+                          (append groups (list (hyprland-ibuffer--filter-group-spec)))
+                        (cons (hyprland-ibuffer--filter-group-spec) groups)))
+          (ibuffer-update nil t))))))
+
+(defun hyprland-ibuffer--remove-filter-group ()
+  "Remove Hyprland filter group from current ibuffer buffer, if present."
+  (when (and (derived-mode-p 'ibuffer-mode)
+             (boundp 'ibuffer-filter-groups))
+    (let ((new-groups (assoc-delete-all hyprland-ibuffer-filter-group-name
+                                        (or ibuffer-filter-groups nil))))
+      (unless (equal new-groups ibuffer-filter-groups)
+        (setq-local ibuffer-filter-groups new-groups)
+        (ibuffer-update nil t)))))
+
+(defun hyprland-ibuffer--map-open-ibuffers (fn)
+  "Run FN in each live ibuffer buffer."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (derived-mode-p 'ibuffer-mode)
+          (funcall fn))))))
 
 (defun hyprland-ibuffer--render-buffer (buffer window)
   "Render WINDOW metadata into BUFFER and update local state."
@@ -246,8 +300,12 @@ Hyprland ibuffer view to preserve ibuffer muscle memory."
   (if hyprland-ibuffer-mirror-mode
       (progn
         (add-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
+        (add-hook 'ibuffer-mode-hook #'hyprland-ibuffer--ensure-filter-group)
+        (hyprland-ibuffer--map-open-ibuffers #'hyprland-ibuffer--ensure-filter-group)
         (ignore-errors (hyprland-ibuffer-sync-buffers)))
-    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)))
+    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
+    (remove-hook 'ibuffer-mode-hook #'hyprland-ibuffer--ensure-filter-group)
+    (hyprland-ibuffer--map-open-ibuffers #'hyprland-ibuffer--remove-filter-group)))
 
 (provide 'hyprland-ibuffer)
 ;;; hyprland-ibuffer.el ends here
