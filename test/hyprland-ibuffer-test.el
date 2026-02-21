@@ -75,5 +75,25 @@
          (when (buffer-live-p buf)
            (kill-buffer buf)))))))
 
+(ert-deftest hyprland-ibuffer-test-ibuffer-row-jump-dispatches ()
+  (let* ((mirror (get-buffer-create "*hypr-mirror*"))
+         (ibuf (get-buffer-create "*hypr-ibuf*"))
+         called)
+    (unwind-protect
+        (progn
+          (with-current-buffer mirror
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0xabc"))
+          (with-current-buffer ibuf
+            (ibuffer-mode)
+            (cl-letf (((symbol-function 'ibuffer-current-buffer)
+                       (lambda (&optional _mark) mirror))
+                      ((symbol-function 'hyprland-buffer-jump)
+                       (lambda () (setq called t))))
+              (hyprland-ibuffer-jump-at-point)
+              (should called))))
+      (when (buffer-live-p mirror) (kill-buffer mirror))
+      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
+
 (provide 'hyprland-ibuffer-test)
 ;;; hyprland-ibuffer-test.el ends here

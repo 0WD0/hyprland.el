@@ -29,6 +29,17 @@
   "g" #'hyprland-buffer-jump
   "k" #'hyprland-buffer-close)
 
+(defvar-keymap hyprland-ibuffer-view-mode-map
+  :doc "Keymap for direct actions in Hyprland ibuffer view."
+  "J" #'hyprland-ibuffer-jump-at-point
+  "K" #'hyprland-ibuffer-close-at-point
+  "T" #'hyprland-ibuffer-tag-at-point)
+
+(define-minor-mode hyprland-ibuffer-view-mode
+  "Minor mode for direct Hyprland actions inside ibuffer."
+  :lighter " HyprIbuf"
+  :keymap hyprland-ibuffer-view-mode-map)
+
 (define-derived-mode hyprland-window-buffer-mode special-mode "HyprWindow"
   "Major mode for mirrored Hyprland window buffers."
   (setq buffer-read-only t))
@@ -113,7 +124,39 @@
   (when-let* ((buf (get-buffer "*Ibuffer-hyprland*")))
     (with-current-buffer buf
       (ibuffer-filter-disable)
-      (ibuffer-filter-by-derived-mode 'hyprland-window-buffer-mode))))
+      (ibuffer-filter-by-derived-mode 'hyprland-window-buffer-mode)
+      (hyprland-ibuffer-view-mode 1))))
+
+(defun hyprland-ibuffer--mirror-buffer-at-point ()
+  "Return Hyprland mirror buffer represented by current ibuffer row."
+  (unless (derived-mode-p 'ibuffer-mode)
+    (user-error "Not in ibuffer"))
+  (let ((buffer (ibuffer-current-buffer t)))
+    (unless (and (buffer-live-p buffer)
+                 (buffer-local-value 'hyprland-window-address buffer))
+      (user-error "Current row is not a Hyprland mirror buffer"))
+    buffer))
+
+(defun hyprland-ibuffer-jump-at-point ()
+  "Jump to Hyprland window represented by current ibuffer row."
+  (interactive)
+  (let ((buffer (hyprland-ibuffer--mirror-buffer-at-point)))
+    (with-current-buffer buffer
+      (hyprland-buffer-jump))))
+
+(defun hyprland-ibuffer-close-at-point ()
+  "Close Hyprland window represented by current ibuffer row."
+  (interactive)
+  (let ((buffer (hyprland-ibuffer--mirror-buffer-at-point)))
+    (with-current-buffer buffer
+      (hyprland-buffer-close))))
+
+(defun hyprland-ibuffer-tag-at-point (tag-op)
+  "Tag Hyprland window at current ibuffer row using TAG-OP."
+  (interactive "sTag op (+foo/-foo/foo): ")
+  (let ((buffer (hyprland-ibuffer--mirror-buffer-at-point)))
+    (with-current-buffer buffer
+      (hyprland-buffer-tag tag-op))))
 
 (define-minor-mode hyprland-ibuffer-mirror-mode
   "Mirror Hyprland windows into regular Emacs buffers for ibuffer workflows."
