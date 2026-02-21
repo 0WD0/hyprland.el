@@ -103,8 +103,7 @@ This function intentionally handles the direct callback form
               (lambda (payload)
                 (hyprland-consult--display-preview payload)))
            (hyprland-consult--display-preview
-            (list :ok nil :message "Preview metadata missing for candidate")))
-       (hyprland-consult--cleanup-preview)))
+            (list :ok nil :message "Preview metadata missing for candidate")))))
     ('exit
      (hyprland-consult--cleanup-preview))
     ('return

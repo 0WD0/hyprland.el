@@ -44,7 +44,7 @@
   :type 'integer
   :group 'hyprland)
 
-(defcustom hyprland-preview-focus-for-accurate-capture t
+(defcustom hyprland-preview-focus-for-accurate-capture nil
   "When non-nil, temporarily focus hidden/off-workspace window before capture.
 
 Wayland screencopy captures visible composition.  For hidden, stacked, or
@@ -140,15 +140,22 @@ WINDOW should contain alist fields `at' and `size' as two-element lists."
         (insert png-bytes))
       (set-file-modes path #o600))))
 
+(defun hyprland-preview--usable-executable-p (path)
+  "Return non-nil when PATH points to a non-empty executable file."
+  (when (and (stringp path) (file-executable-p path) (file-regular-p path))
+    (let ((attrs (file-attributes path 'string)))
+      (and attrs (> (file-attribute-size attrs) 0)))))
+
 (defun hyprland-preview--toplevel-helper-path ()
   "Return absolute path of toplevel helper executable, or nil."
   (when (stringp hyprland-preview-toplevel-helper-executable)
-    (or (executable-find hyprland-preview-toplevel-helper-executable)
-        (let* ((lib (or load-file-name (locate-library "hyprland-preview")))
-               (root (and lib (file-name-directory lib)))
-               (local (and root (expand-file-name "tools/hyprland-toplevel-snap" root))))
-          (when (and (stringp local) (file-executable-p local))
-            local)))))
+    (let ((from-path (executable-find hyprland-preview-toplevel-helper-executable)))
+      (or (and (hyprland-preview--usable-executable-p from-path) from-path)
+          (let* ((lib (or load-file-name (locate-library "hyprland-preview")))
+                 (root (and lib (file-name-directory lib)))
+                 (local (and root (expand-file-name "tools/hyprland-toplevel-snap" root))))
+            (when (hyprland-preview--usable-executable-p local)
+              local))))))
 
 (defun hyprland-preview--capture-args (window)
   "Return grim command args for capturing WINDOW preview.
@@ -288,39 +295,56 @@ Requests are single-flight: starting a new request cancels the prior one."
                           (chunks nil))
                      (when (eq backend 'grim)
                        (hyprland-preview--prepare-focus-for-capture window))
-                     (setq hyprland-preview--active-process
-                           (make-process
-                            :name (format "hyprland-preview-%s" backend)
-                            :command (cons program args)
-                            :buffer nil
-                            :noquery t
-                            :coding 'binary
-                            :connection-type 'pipe
-                            :filter (lambda (_proc chunk)
-                                      (push chunk chunks))
-                            :sentinel
-                            (lambda (process _event)
-                              (when (and (= token hyprland-preview--active-token)
-                                         (memq (process-status process) '(exit signal)))
-                                (setq hyprland-preview--active-process nil)
-                                (when (eq backend 'grim)
-                                  (hyprland-preview--restore-focus))
-                                (if (and (eq (process-status process) 'exit)
-                                         (= (process-exit-status process) 0))
-                                    (let ((bytes (apply #'concat (nreverse chunks))))
-                                      (hyprland-preview--cache-put key bytes)
-                                      (funcall callback (list :ok t :png-bytes bytes :cached nil)))
-                                  (if (cdr remaining)
-                                      (run-attempt (cdr remaining))
-                                    (funcall callback
-                                             (list :ok nil
-                                                   :reason 'capture-failed
-                                                   :message
-                                                   (format "%s backend exited %s"
-                                                           backend
-                                                           (if (eq (process-status process) 'exit)
-                                                               (process-exit-status process)
-                                                             (process-status process))))))))))))))
+                     (let ((process
+                            (condition-case err
+                                (make-process
+                                 :name (format "hyprland-preview-%s" backend)
+                                 :command (cons program args)
+                                 :buffer nil
+                                 :noquery t
+                                 :coding 'binary
+                                 :connection-type 'pipe
+                                 :filter (lambda (_proc chunk)
+                                           (push chunk chunks))
+                                 :sentinel
+                                 (lambda (process _event)
+                                   (when (and (= token hyprland-preview--active-token)
+                                              (memq (process-status process) '(exit signal)))
+                                     (setq hyprland-preview--active-process nil)
+                                     (when (eq backend 'grim)
+                                       (hyprland-preview--restore-focus))
+                                     (if (and (eq (process-status process) 'exit)
+                                              (= (process-exit-status process) 0))
+                                         (let ((bytes (apply #'concat (nreverse chunks))))
+                                           (hyprland-preview--cache-put key bytes)
+                                           (funcall callback (list :ok t :png-bytes bytes :cached nil)))
+                                       (if (cdr remaining)
+                                           (run-attempt (cdr remaining))
+                                         (funcall callback
+                                                  (list :ok nil
+                                                        :reason 'capture-failed
+                                                        :message
+                                                        (format "%s backend exited %s"
+                                                                backend
+                                                                (if (eq (process-status process) 'exit)
+                                                                    (process-exit-status process)
+                                                                  (process-status process))))))))))
+                              (error
+                               (setq hyprland-preview--active-process nil)
+                               (when (eq backend 'grim)
+                                 (hyprland-preview--restore-focus))
+                               (if (cdr remaining)
+                                   (run-attempt (cdr remaining))
+                                 (funcall callback
+                                          (list :ok nil
+                                                :reason 'capture-failed
+                                                :message
+                                                (format "%s backend failed to start: %s"
+                                                        backend
+                                                        (error-message-string err)))))
+                               nil))))
+                       (when process
+                         (setq hyprland-preview--active-process process))))))
               (run-attempt attempts))))))))
 
 (provide 'hyprland-preview)

@@ -18,12 +18,12 @@
       (hyprland-consult--state 'return "cand")
       (should called))))
 
-(ert-deftest hyprland-consult-test-state/preview-nil-cleans-up ()
+(ert-deftest hyprland-consult-test-state/preview-nil-keeps-existing-preview ()
   (let (called)
     (cl-letf (((symbol-function 'hyprland-consult--cleanup-preview)
                (lambda () (setq called t))))
       (hyprland-consult--state 'preview nil)
-      (should called))))
+      (should-not called))))
 
 (ert-deftest hyprland-consult-test-state/preview-candidate-triggers-preview-request ()
   (let* ((window '((address . "0xabc")))

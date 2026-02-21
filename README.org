@@ -100,6 +100,7 @@ Important options:
 - ~hyprland-preview-cache-directory~: cache directory when using disk mode
 - ~hyprland-preview-capture-backend~: ~auto~ (default), ~toplevel~, or ~grim~
 - ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
+- ~hyprland-preview-focus-for-accurate-capture~: default ~nil~ (avoid focus flicker); set ~t~ only if you prefer aggressive grim fallback accuracy
 
 Reconcile defaults (already tuned):
 
