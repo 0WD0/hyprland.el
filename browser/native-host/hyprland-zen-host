@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import selectors
+import socket
+import sys
+
+
+def resolve_socket_path() -> str:
+    custom = os.environ.get("HYPRLAND_ZEN_SOCKET")
+    if custom:
+        return custom
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return os.path.join(runtime, "hyprland-zen-bridge.sock")
+    return f"/tmp/hyprland-zen-bridge-{os.getuid()}.sock"
+
+
+def encode_json_line(payload: dict) -> bytes:
+    return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def emit(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def bind_listener(path: str) -> socket.socket:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    if os.path.exists(path):
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.connect(path)
+        except OSError:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        else:
+            raise SystemExit(f"hyprland-zen-host already running at {path}")
+        finally:
+            probe.close()
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(1)
+    listener.setblocking(False)
+    return listener
+
+
+def close_connection(sel: selectors.BaseSelector, conn: socket.socket | None) -> None:
+    if conn is None:
+        return
+    try:
+        sel.unregister(conn)
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except OSError:
+        pass
+
+
+def run() -> int:
+    socket_path = resolve_socket_path()
+    listener = bind_listener(socket_path)
+    sel = selectors.DefaultSelector()
+    sel.register(sys.stdin, selectors.EVENT_READ, "stdin")
+    sel.register(listener, selectors.EVENT_READ, "listener")
+
+    browser_conn: socket.socket | None = None
+    browser_buffer = ""
+
+    try:
+        while True:
+            for key, _ in sel.select(timeout=0.5):
+                tag = key.data
+
+                if tag == "stdin":
+                    line = sys.stdin.readline()
+                    if line == "":
+                        return 0
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError as err:
+                        emit({"type": "error", "op": "decode", "message": str(err)})
+                        continue
+
+                    if browser_conn is None:
+                        emit(
+                            {
+                                "type": "error",
+                                "op": str(payload.get("op", "")),
+                                "message": "browser-bridge-not-connected",
+                            }
+                        )
+                        continue
+
+                    try:
+                        browser_conn.sendall(encode_json_line(payload))
+                    except OSError:
+                        close_connection(sel, browser_conn)
+                        browser_conn = None
+                        browser_buffer = ""
+                        emit(
+                            {
+                                "type": "error",
+                                "op": str(payload.get("op", "")),
+                                "message": "browser-bridge-disconnected",
+                            }
+                        )
+
+                elif tag == "listener":
+                    conn, _ = listener.accept()
+                    conn.setblocking(False)
+                    close_connection(sel, browser_conn)
+                    browser_conn = conn
+                    browser_buffer = ""
+                    sel.register(browser_conn, selectors.EVENT_READ, "browser")
+
+                elif tag == "browser":
+                    assert browser_conn is not None
+                    try:
+                        data = browser_conn.recv(4096)
+                    except OSError:
+                        data = b""
+
+                    if not data:
+                        close_connection(sel, browser_conn)
+                        browser_conn = None
+                        browser_buffer = ""
+                        continue
+
+                    browser_buffer += data.decode("utf-8", errors="replace")
+                    while "\n" in browser_buffer:
+                        raw_line, browser_buffer = browser_buffer.split("\n", 1)
+                        raw_line = raw_line.strip()
+                        if not raw_line:
+                            continue
+                        try:
+                            payload = json.loads(raw_line)
+                        except json.JSONDecodeError as err:
+                            emit({"type": "error", "op": "decode", "message": str(err)})
+                            continue
+                        emit(payload)
+    finally:
+        close_connection(sel, browser_conn)
+        try:
+            sel.unregister(listener)
+        except Exception:
+            pass
+        listener.close()
+        try:
+            os.unlink(socket_path)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    raise SystemExit(run())

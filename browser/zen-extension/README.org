@@ -33,6 +33,11 @@ Use the template in:
 
 ~../native-host/hyprland_zen_bridge.json~
 
+Native-host executables live in:
+
+- ~../native-host/hyprland-zen-host~ (Emacs bridge)
+- ~../native-host/hyprland-zen-native-host~ (browser Native Messaging adapter)
+
 * Quick test flow
 
 1. Load temporary add-on from ~manifest.json~
@@ -51,6 +56,7 @@ Use the template in:
 5. Once native host path is installed, verify commands:
    - ~M-x hyprland-zen-tab-switch~
    - ~M-x hyprland-zen-workspace-switch~
+   - ~M-x hyprland-zen-open-url~
 
 * Message model
 

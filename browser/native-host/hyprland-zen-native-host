@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import selectors
+import socket
+import struct
+import sys
+import time
+
+
+def resolve_socket_path() -> str:
+    custom = os.environ.get("HYPRLAND_ZEN_SOCKET")
+    if custom:
+        return custom
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return os.path.join(runtime, "hyprland-zen-bridge.sock")
+    return f"/tmp/hyprland-zen-bridge-{os.getuid()}.sock"
+
+
+def encode_json_line(payload: dict) -> bytes:
+    return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def write_native_message(payload: dict) -> None:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack("<I", len(body)))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+
+class Bridge:
+    def __init__(self) -> None:
+        self.selector = selectors.DefaultSelector()
+        self.stdin_fd = sys.stdin.fileno()
+        os.set_blocking(self.stdin_fd, False)
+        self.selector.register(self.stdin_fd, selectors.EVENT_READ, "stdin")
+        self.socket_path = resolve_socket_path()
+        self.sock: socket.socket | None = None
+        self.last_connect_attempt = 0.0
+        self.stdin_buffer = bytearray()
+        self.socket_buffer = ""
+        self.pending_lines: list[bytes] = []
+
+    def close_socket(self) -> None:
+        if self.sock is None:
+            return
+        try:
+            self.selector.unregister(self.sock)
+        except Exception:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        self.sock = None
+        self.socket_buffer = ""
+
+    def try_connect_socket(self) -> None:
+        if self.sock is not None:
+            return
+        now = time.monotonic()
+        if now - self.last_connect_attempt < 1.0:
+            return
+        self.last_connect_attempt = now
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(self.socket_path)
+        except OSError:
+            sock.close()
+            return
+
+        sock.setblocking(False)
+        self.sock = sock
+        self.selector.register(sock, selectors.EVENT_READ, "socket")
+        self.flush_pending()
+
+    def queue_line(self, line: bytes) -> None:
+        self.pending_lines.append(line)
+        if len(self.pending_lines) > 256:
+            self.pending_lines = self.pending_lines[-256:]
+
+    def flush_pending(self) -> None:
+        if self.sock is None:
+            return
+        while self.pending_lines:
+            line = self.pending_lines[0]
+            try:
+                self.sock.sendall(line)
+            except OSError:
+                self.close_socket()
+                return
+            self.pending_lines.pop(0)
+
+    def process_native_stdin(self, data: bytes) -> bool:
+        if not data:
+            return False
+        self.stdin_buffer.extend(data)
+
+        while len(self.stdin_buffer) >= 4:
+            msg_len = struct.unpack("<I", self.stdin_buffer[:4])[0]
+            if len(self.stdin_buffer) < 4 + msg_len:
+                break
+            payload_bytes = bytes(self.stdin_buffer[4 : 4 + msg_len])
+            del self.stdin_buffer[: 4 + msg_len]
+
+            try:
+                payload = json.loads(payload_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+
+            line = encode_json_line(payload)
+            if self.sock is None:
+                self.queue_line(line)
+                continue
+
+            try:
+                self.sock.sendall(line)
+            except OSError:
+                self.close_socket()
+                self.queue_line(line)
+        return True
+
+    def process_socket_data(self, data: bytes) -> None:
+        if not data:
+            self.close_socket()
+            return
+
+        self.socket_buffer += data.decode("utf-8", errors="replace")
+        while "\n" in self.socket_buffer:
+            raw_line, self.socket_buffer = self.socket_buffer.split("\n", 1)
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            write_native_message(payload)
+
+    def run(self) -> int:
+        try:
+            while True:
+                self.try_connect_socket()
+                events = self.selector.select(timeout=0.25)
+                if not events:
+                    self.flush_pending()
+                    continue
+
+                for key, _ in events:
+                    tag = key.data
+                    if tag == "stdin":
+                        try:
+                            data = os.read(self.stdin_fd, 8192)
+                        except BlockingIOError:
+                            continue
+                        if not self.process_native_stdin(data):
+                            return 0
+                    elif tag == "socket":
+                        assert self.sock is not None
+                        try:
+                            data = self.sock.recv(8192)
+                        except BlockingIOError:
+                            continue
+                        except OSError:
+                            self.close_socket()
+                            continue
+                        self.process_socket_data(data)
+
+                self.flush_pending()
+        finally:
+            self.close_socket()
+
+
+if __name__ == "__main__":
+    raise SystemExit(Bridge().run())

@@ -1,7 +1,7 @@
 {
   "name": "hyprland_zen_bridge",
   "description": "hyprland zen bridge host",
-  "path": "/absolute/path/to/hyprland-zen-host",
+  "path": "/absolute/path/to/hyprland-zen-native-host",
   "type": "stdio",
   "allowed_extensions": [
     "hyprland-zen-bridge@0wd0"

@@ -112,7 +112,9 @@ Plugin scaffold now exists in this repo:
 
 - ~browser/zen-extension/manifest.json~
 - ~browser/zen-extension/background.js~
-- ~browser/native-host/hyprland_zen_bridge.json~ (template)
+- ~browser/native-host/hyprland-zen-host~ (Emacs bridge executable)
+- ~browser/native-host/hyprland-zen-native-host~ (browser Native Messaging executable)
+- ~browser/native-host/hyprland_zen_bridge.json~ (native host manifest template)
 
 It runs on Firefox-compatible APIs, so it works on Zen and plain Firefox.
 Workspace is currently derived as ~windowId + cookieStoreId~.
@@ -122,8 +124,14 @@ provider while keeping this fallback path.
 Testing path:
 
 1. Load temporary extension from ~browser/zen-extension/manifest.json~
-2. Install native host manifest from ~browser/native-host/hyprland_zen_bridge.json~
-3. In Emacs run:
+2. Set executable permissions (once):
+
+#+begin_src bash
+chmod +x browser/native-host/hyprland-zen-host browser/native-host/hyprland-zen-native-host
+#+end_src
+
+3. Install native host manifest from ~browser/native-host/hyprland_zen_bridge.json~ and set its ~path~ to absolute ~hyprland-zen-native-host~
+4. In Emacs run:
 
 #+begin_src emacs-lisp
 (hyprland-zen-start)

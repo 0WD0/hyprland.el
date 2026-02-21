@@ -41,6 +41,29 @@ The host process exchanges one JSON object per line with Emacs."
 (defvar hyprland-zen-after-refresh-hook nil
   "Hook run after Zen tab store changes.")
 
+(defun hyprland-zen--usable-executable-p (path)
+  "Return non-nil when PATH points to a non-empty executable file."
+  (when (and (stringp path) (file-executable-p path) (file-regular-p path))
+    (let ((attrs (file-attributes path 'string)))
+      (and attrs (> (file-attribute-size attrs) 0)))))
+
+(defun hyprland-zen--resolve-host-command ()
+  "Resolve configured host command, supporting local repo fallback."
+  (when-let* ((cmd hyprland-zen-host-command)
+              (head (car cmd)))
+    (let ((from-path (executable-find head)))
+      (cond
+       ((hyprland-zen--usable-executable-p from-path)
+        (cons from-path (cdr cmd)))
+       ((hyprland-zen--usable-executable-p head)
+        cmd)
+       (t
+        (let* ((lib (or load-file-name (locate-library "hyprland-zen")))
+               (root (and lib (file-name-directory lib)))
+               (local (and root (expand-file-name "browser/native-host/hyprland-zen-host" root))))
+          (when (hyprland-zen--usable-executable-p local)
+            (cons local (cdr cmd)))))))))
+
 (defun hyprland-zen--field (alist key)
   "Return ALIST field KEY, allowing both symbol and string keys."
   (or (alist-get key alist)
@@ -197,7 +220,7 @@ The host process exchanges one JSON object per line with Emacs."
 (defun hyprland-zen-workspaces ()
   "Return current Zen workspace list.
 
-Active workspaces are sorted first, then by name." 
+Active workspaces are sorted first, then by name."
   (let (out)
     (maphash (lambda (_key workspace) (push workspace out)) hyprland-zen--workspaces)
     (sort out
@@ -225,7 +248,7 @@ Active tabs are sorted first, then by title."
                 a-active))))))
 
 (defun hyprland-zen--tab-label (tab)
-  "Build completion label from TAB alist." 
+  "Build completion label from TAB alist."
   (let ((active (if (hyprland-zen--truthy-p (hyprland-zen--field tab 'active)) "*" " "))
         (pinned (if (hyprland-zen--truthy-p (hyprland-zen--field tab 'pinned)) "!" " "))
         (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
@@ -235,7 +258,7 @@ Active tabs are sorted first, then by title."
     (format "%s%s[%s/%s] %s <%s>" active pinned profile workspace title key)))
 
 (defun hyprland-zen--workspace-label (workspace)
-  "Build completion label from WORKSPACE alist." 
+  "Build completion label from WORKSPACE alist."
   (let ((active (if (hyprland-zen--truthy-p (hyprland-zen--field workspace 'active)) "*" " "))
         (profile (hyprland-zen--string (hyprland-zen--field workspace 'profile) "default"))
         (name (hyprland-zen--string (hyprland-zen--field workspace 'name) "default"))
@@ -250,21 +273,21 @@ Active tabs are sorted first, then by title."
         (hyprland-zen--field message 'event)))))
 
 (defun hyprland-zen--remove-message-key (message)
-  "Extract tab key from MESSAGE remove payload." 
+  "Extract tab key from MESSAGE remove payload."
   (or (hyprland-zen--field message 'key)
       (when-let* ((tab (hyprland-zen--field message 'tab)))
         (hyprland-zen--tab-key tab))
       (hyprland-zen--tab-key message)))
 
 (defun hyprland-zen--remove-workspace-key (message)
-  "Extract workspace key from MESSAGE remove payload." 
+  "Extract workspace key from MESSAGE remove payload."
   (or (hyprland-zen--field message 'key)
       (when-let* ((workspace (hyprland-zen--field message 'workspace)))
         (hyprland-zen--workspace-key workspace))
       (hyprland-zen--workspace-key message)))
 
 (defun hyprland-zen--apply-message (message)
-  "Apply parsed host MESSAGE to in-memory state." 
+  "Apply parsed host MESSAGE to in-memory state."
   (pcase (hyprland-zen--message-type message)
     ("snapshot"
      (hyprland-zen--clear-store)
@@ -366,21 +389,25 @@ Active tabs are sorted first, then by title."
     (unless (and (listp hyprland-zen-host-command)
                  (car hyprland-zen-host-command))
       (user-error "`hyprland-zen-host-command' must be a non-empty command list"))
-    (setq hyprland-zen--fragment "")
-    (setq hyprland-zen--process
-          (make-process
-           :name "hyprland-zen-host"
-           :command hyprland-zen-host-command
-           :buffer nil
-           :noquery t
-           :connection-type 'pipe
-           :coding 'utf-8-unix
-           :filter #'hyprland-zen--process-filter
-           :sentinel #'hyprland-zen--process-sentinel))
-    (when hyprland-zen-auto-refresh-on-start
-      (hyprland-zen-refresh)
-      (hyprland-zen-refresh-workspaces))
-    hyprland-zen--process))
+    (let ((resolved (hyprland-zen--resolve-host-command)))
+      (unless resolved
+        (user-error "Unable to resolve `%s'; install browser/native-host/hyprland-zen-host or set `hyprland-zen-host-command'"
+                    (car hyprland-zen-host-command)))
+      (setq hyprland-zen--fragment "")
+      (setq hyprland-zen--process
+            (make-process
+             :name "hyprland-zen-host"
+             :command resolved
+             :buffer nil
+             :noquery t
+             :connection-type 'pipe
+             :coding 'utf-8-unix
+             :filter #'hyprland-zen--process-filter
+             :sentinel #'hyprland-zen--process-sentinel))
+      (when hyprland-zen-auto-refresh-on-start
+        (hyprland-zen-refresh)
+        (hyprland-zen-refresh-workspaces))
+      hyprland-zen--process)))
 
 (defun hyprland-zen-stop ()
   "Stop Zen native host process."
@@ -391,12 +418,12 @@ Active tabs are sorted first, then by title."
         hyprland-zen--fragment ""))
 
 (defun hyprland-zen-refresh ()
-  "Request full tab snapshot from Zen host." 
+  "Request full tab snapshot from Zen host."
   (interactive)
   (hyprland-zen--send '((op . "list-tabs"))))
 
 (defun hyprland-zen-refresh-workspaces ()
-  "Request full workspace snapshot from Zen host." 
+  "Request full workspace snapshot from Zen host."
   (interactive)
   (hyprland-zen--send '((op . "list-workspaces"))))
 
@@ -417,7 +444,7 @@ Active tabs are sorted first, then by title."
     (cdr (assoc (completing-read prompt cands nil t) cands))))
 
 (defun hyprland-zen--read-workspace (prompt)
-  "Read workspace from completion list using PROMPT." 
+  "Read workspace from completion list using PROMPT."
   (let* ((workspaces (hyprland-zen-workspaces))
          (cands (mapcar (lambda (workspace)
                           (cons (hyprland-zen--workspace-label workspace) workspace))
@@ -451,7 +478,7 @@ When TAB is nil, prompt from current registry."
 (defun hyprland-zen-workspace-switch (&optional workspace)
   "Activate WORKSPACE via host command.
 
-When WORKSPACE is nil, prompt from current registry." 
+When WORKSPACE is nil, prompt from current registry."
   (interactive)
   (let* ((target (or workspace (hyprland-zen--read-workspace "Zen workspace: ")))
          (key (hyprland-zen--workspace-key target)))
