@@ -32,5 +32,26 @@
       (hyprland-reconcile--run 'fast)
       (should called))))
 
+(ert-deftest hyprland-reconcile-test-request-uses-one-shot-debounce-timer ()
+  (let (scheduled)
+    (setq hyprland-reconcile--debounce-timer nil
+          hyprland-reconcile--pending-mode nil)
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (secs repeat fn &rest args)
+                 (setq scheduled (list secs repeat fn args))
+                 'fake-timer)))
+      (hyprland-reconcile-request-fast "test")
+      (should (equal (nth 1 scheduled) nil))
+      (should (eq (nth 2 scheduled) #'hyprland-reconcile--flush-debounced))
+      (should (eq hyprland-reconcile--debounce-timer 'fake-timer)))))
+
+(ert-deftest hyprland-reconcile-test-stop-cancels-flush-function-timers ()
+  (let (cancelled)
+    (cl-letf (((symbol-function 'cancel-function-timers)
+               (lambda (fn)
+                 (setq cancelled fn))))
+      (hyprland-reconcile-stop)
+      (should (eq cancelled #'hyprland-reconcile--flush-debounced)))))
+
 (provide 'hyprland-reconcile-test)
 ;;; hyprland-reconcile-test.el ends here

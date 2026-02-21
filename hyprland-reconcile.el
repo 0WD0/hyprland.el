@@ -131,9 +131,9 @@ REASON is optional debug context."
   (hyprland--debug "reconcile request mode=%s reason=%s" mode reason)
   (unless hyprland-reconcile--debounce-timer
     (setq hyprland-reconcile--debounce-timer
-          (run-at-time
-           0
+          (run-with-timer
            (/ hyprland-reconcile-debounce-ms 1000.0)
+           nil
            #'hyprland-reconcile--flush-debounced))))
 
 (defun hyprland-reconcile-request-fast (&optional reason)
@@ -156,6 +156,7 @@ REASON is optional debug context."
 
 (defun hyprland-reconcile-stop ()
   "Stop all reconcile timers and in-flight debounce state."
+  (cancel-function-timers #'hyprland-reconcile--flush-debounced)
   (when (timerp hyprland-reconcile--debounce-timer)
     (cancel-timer hyprland-reconcile--debounce-timer))
   (when (timerp hyprland-reconcile--periodic-timer)
