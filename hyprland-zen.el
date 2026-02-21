@@ -17,7 +17,7 @@
   "Zen browser integration for hyprland.el."
   :group 'hyprland)
 
-(defcustom hyprland-zen-host-command '("hyprland-zen-host")
+(defcustom hyprland-zen-host-command '("hyprland-zen-native-host" "--line-stdio")
   "Command list used to launch the Zen native host bridge.
 
 The host process exchanges one JSON object per line with Emacs."
@@ -60,7 +60,7 @@ The host process exchanges one JSON object per line with Emacs."
        (t
         (let* ((lib (or load-file-name (locate-library "hyprland-zen")))
                (root (and lib (file-name-directory lib)))
-               (local (and root (expand-file-name "browser/native-host/hyprland-zen-host" root))))
+               (local (and root (expand-file-name "browser/native-host/hyprland-zen-native-host" root))))
           (when (hyprland-zen--usable-executable-p local)
             (cons local (cdr cmd)))))))))
 
@@ -391,12 +391,12 @@ Active tabs are sorted first, then by title."
       (user-error "`hyprland-zen-host-command' must be a non-empty command list"))
     (let ((resolved (hyprland-zen--resolve-host-command)))
       (unless resolved
-        (user-error "Unable to resolve `%s'; install browser/native-host/hyprland-zen-host or set `hyprland-zen-host-command'"
+        (user-error "Unable to resolve `%s'; install browser/native-host/hyprland-zen-native-host or set `hyprland-zen-host-command'"
                     (car hyprland-zen-host-command)))
       (setq hyprland-zen--fragment "")
       (setq hyprland-zen--process
             (make-process
-             :name "hyprland-zen-host"
+             :name "hyprland-zen-bridge"
              :command resolved
              :buffer nil
              :noquery t

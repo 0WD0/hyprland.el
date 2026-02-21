@@ -22,7 +22,7 @@ Current version: ~0.1.0~ (early but usable).
 - ~grim~ in PATH (for static preview)
 - Optional: ~hyprland-toplevel-snap~ helper (for workspace/occlusion-robust preview)
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
-- Optional: ~hyprland-zen-host~ executable (for ~hyprland-zen-*~ commands)
+- Optional: ~hyprland-zen-native-host~ executable (for ~hyprland-zen-*~ commands)
 - Optional: Zen/Firefox WebExtension under ~browser/zen-extension/~
 
 * Installation
@@ -112,8 +112,7 @@ Plugin scaffold now exists in this repo:
 
 - ~browser/zen-extension/manifest.json~
 - ~browser/zen-extension/background.js~
-- ~browser/native-host/hyprland-zen-host~ (Emacs bridge executable)
-- ~browser/native-host/hyprland-zen-native-host~ (browser Native Messaging executable)
+- ~browser/native-host/hyprland-zen-native-host~ (single executable for browser native mode + Emacs line-stdio mode)
 - ~browser/native-host/hyprland_zen_bridge.json~ (native host manifest template)
 
 It runs on Firefox-compatible APIs, so it works on Zen and plain Firefox.
@@ -127,7 +126,7 @@ Testing path:
 2. Set executable permissions (once):
 
 #+begin_src bash
-chmod +x browser/native-host/hyprland-zen-host browser/native-host/hyprland-zen-native-host
+chmod +x browser/native-host/hyprland-zen-native-host
 #+end_src
 
 3. Install native host manifest from ~browser/native-host/hyprland_zen_bridge.json~ and set its ~path~ to absolute ~hyprland-zen-native-host~
@@ -183,7 +182,7 @@ Important options:
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 - ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command
 - ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
-- ~hyprland-zen-host-command~: command list used to launch Zen host process
+- ~hyprland-zen-host-command~: command list used to launch Zen bridge process
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
 
 Reconcile defaults (already tuned):

@@ -2,12 +2,13 @@
 
 * Components
 
-- ~hyprland-zen-host~
-  - line-delimited JSON bridge used by Emacs (~hyprland-zen.el~)
-  - listens on unix socket and forwards messages between Emacs and browser host
 - ~hyprland-zen-native-host~
-  - Native Messaging adapter launched by Zen/Firefox
-  - translates Native Messaging frames to unix socket line protocol
+  - single executable with two modes:
+    - default: Native Messaging adapter launched by Zen/Firefox
+    - ~--line-stdio~: line JSON bridge used by Emacs (~hyprland-zen.el~)
+
+The browser-side default mode and Emacs-side ~--line-stdio~ mode communicate
+through one unix socket.
 
 Both scripts use this socket path:
 
@@ -17,16 +18,16 @@ Both scripts use this socket path:
 
 * Install notes
 
-1. Put both scripts on your PATH (or use absolute paths)
+1. Put ~hyprland-zen-native-host~ on your PATH (or use absolute path)
 2. Copy ~hyprland_zen_bridge.json~ to your browser's NativeMessagingHosts dir
 3. In that JSON file, set ~path~ to absolute path of ~hyprland-zen-native-host~
 4. Ensure ~allowed_extensions~ includes extension id from ~manifest.json~
 
 * Emacs side
 
-Default ~hyprland-zen-host-command~ is ~("hyprland-zen-host")~.
+Default ~hyprland-zen-host-command~ is ~("hyprland-zen-native-host" "--line-stdio")~.
 If not on PATH, you can set:
 
 #+begin_src emacs-lisp
-(setq hyprland-zen-host-command '("/absolute/path/to/hyprland-zen-host"))
+(setq hyprland-zen-host-command '("/absolute/path/to/hyprland-zen-native-host" "--line-stdio"))
 #+end_src

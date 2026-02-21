@@ -30,7 +30,12 @@ def write_native_message(payload: dict) -> None:
     sys.stdout.buffer.flush()
 
 
-class Bridge:
+def emit_line(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+class NativeAdapter:
     def __init__(self) -> None:
         self.selector = selectors.DefaultSelector()
         self.stdin_fd = sys.stdin.fileno()
@@ -64,14 +69,12 @@ class Bridge:
         if now - self.last_connect_attempt < 1.0:
             return
         self.last_connect_attempt = now
-
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(self.socket_path)
         except OSError:
             sock.close()
             return
-
         sock.setblocking(False)
         self.sock = sock
         self.selector.register(sock, selectors.EVENT_READ, "socket")
@@ -98,24 +101,20 @@ class Bridge:
         if not data:
             return False
         self.stdin_buffer.extend(data)
-
         while len(self.stdin_buffer) >= 4:
             msg_len = struct.unpack("<I", self.stdin_buffer[:4])[0]
             if len(self.stdin_buffer) < 4 + msg_len:
                 break
             payload_bytes = bytes(self.stdin_buffer[4 : 4 + msg_len])
             del self.stdin_buffer[: 4 + msg_len]
-
             try:
                 payload = json.loads(payload_bytes.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-
             line = encode_json_line(payload)
             if self.sock is None:
                 self.queue_line(line)
                 continue
-
             try:
                 self.sock.sendall(line)
             except OSError:
@@ -127,7 +126,6 @@ class Bridge:
         if not data:
             self.close_socket()
             return
-
         self.socket_buffer += data.decode("utf-8", errors="replace")
         while "\n" in self.socket_buffer:
             raw_line, self.socket_buffer = self.socket_buffer.split("\n", 1)
@@ -148,7 +146,6 @@ class Bridge:
                 if not events:
                     self.flush_pending()
                     continue
-
                 for key, _ in events:
                     tag = key.data
                     if tag == "stdin":
@@ -168,11 +165,137 @@ class Bridge:
                             self.close_socket()
                             continue
                         self.process_socket_data(data)
-
                 self.flush_pending()
         finally:
             self.close_socket()
 
 
+class LineBridgeServer:
+    def __init__(self) -> None:
+        self.socket_path = resolve_socket_path()
+        self.listener = self.bind_listener(self.socket_path)
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
+        self.selector.register(self.listener, selectors.EVENT_READ, "listener")
+        self.browser_conn: socket.socket | None = None
+        self.browser_buffer = ""
+
+    def bind_listener(self, path: str) -> socket.socket:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        if os.path.exists(path):
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.connect(path)
+            except OSError:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            else:
+                raise SystemExit(f"hyprland-zen-native-host already running at {path}")
+            finally:
+                probe.close()
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        listener.setblocking(False)
+        return listener
+
+    def close_connection(self) -> None:
+        if self.browser_conn is None:
+            return
+        try:
+            self.selector.unregister(self.browser_conn)
+        except Exception:
+            pass
+        try:
+            self.browser_conn.close()
+        except OSError:
+            pass
+        self.browser_conn = None
+        self.browser_buffer = ""
+
+    def run(self) -> int:
+        try:
+            while True:
+                for key, _ in self.selector.select(timeout=0.5):
+                    tag = key.data
+                    if tag == "stdin":
+                        line = sys.stdin.readline()
+                        if line == "":
+                            return 0
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError as err:
+                            emit_line({"type": "error", "op": "decode", "message": str(err)})
+                            continue
+                        if self.browser_conn is None:
+                            emit_line({
+                                "type": "error",
+                                "op": str(payload.get("op", "")),
+                                "message": "browser-bridge-not-connected"
+                            })
+                            continue
+                        try:
+                            self.browser_conn.sendall(encode_json_line(payload))
+                        except OSError:
+                            self.close_connection()
+                            emit_line({
+                                "type": "error",
+                                "op": str(payload.get("op", "")),
+                                "message": "browser-bridge-disconnected"
+                            })
+                    elif tag == "listener":
+                        conn, _ = self.listener.accept()
+                        conn.setblocking(False)
+                        self.close_connection()
+                        self.browser_conn = conn
+                        self.browser_buffer = ""
+                        self.selector.register(self.browser_conn, selectors.EVENT_READ, "browser")
+                    elif tag == "browser":
+                        assert self.browser_conn is not None
+                        try:
+                            data = self.browser_conn.recv(4096)
+                        except OSError:
+                            data = b""
+                        if not data:
+                            self.close_connection()
+                            continue
+                        self.browser_buffer += data.decode("utf-8", errors="replace")
+                        while "\n" in self.browser_buffer:
+                            raw_line, self.browser_buffer = self.browser_buffer.split("\n", 1)
+                            raw_line = raw_line.strip()
+                            if not raw_line:
+                                continue
+                            try:
+                                payload = json.loads(raw_line)
+                            except json.JSONDecodeError as err:
+                                emit_line({"type": "error", "op": "decode", "message": str(err)})
+                                continue
+                            emit_line(payload)
+        finally:
+            self.close_connection()
+            try:
+                self.selector.unregister(self.listener)
+            except Exception:
+                pass
+            self.listener.close()
+            try:
+                os.unlink(self.socket_path)
+            except OSError:
+                pass
+
+
+def main() -> int:
+    if "--line-stdio" in sys.argv[1:]:
+        return LineBridgeServer().run()
+    return NativeAdapter().run()
+
+
 if __name__ == "__main__":
-    raise SystemExit(Bridge().run())
+    raise SystemExit(main())

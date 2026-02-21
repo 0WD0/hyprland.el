@@ -35,8 +35,7 @@ Use the template in:
 
 Native-host executables live in:
 
-- ~../native-host/hyprland-zen-host~ (Emacs bridge)
-- ~../native-host/hyprland-zen-native-host~ (browser Native Messaging adapter)
+- ~../native-host/hyprland-zen-native-host~ (single executable for browser native mode + Emacs line-stdio mode)
 
 * Quick test flow
 
