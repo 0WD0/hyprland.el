@@ -47,9 +47,19 @@
           (hyprland-local-smoke--assert (> (hash-table-count hyprland-ibuffer--address->buffer) 0)
                                         "no mirror buffers created after sync")
 
+          ;; Simulate manual mirror-buffer deletion without touching real windows,
+          ;; then verify sync can recover without selecting dead buffers.
+          (when-let* ((victim (car (hash-table-values hyprland-ibuffer--address->buffer))))
+            (when (buffer-live-p victim)
+              (let ((hyprland-ibuffer--suppress-kill-action t))
+                (kill-buffer victim))
+              (hyprland-ibuffer-sync-buffers)
+              (hyprland-local-smoke--assert (> (hash-table-count hyprland-ibuffer--address->buffer) 0)
+                                            "sync did not recover mirror buffers after deletion")))
+
           ;; Verify saved-group shape and ensure we can switch without filter errors.
           (setq ibuffer-saved-filter-groups nil)
-          (hyprland-ibuffer-install-saved-filter-group)
+          (hyprland-ibuffer-install-saved-filter-group t)
           (let* ((entry (assoc hyprland-ibuffer-saved-filter-group-profile
                                ibuffer-saved-filter-groups))
                  (group (car (cdr entry)))

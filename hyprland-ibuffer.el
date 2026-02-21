@@ -39,8 +39,19 @@ This profile is used by `hyprland-ibuffer-open-native'."
   :type 'string
   :group 'hyprland-ibuffer)
 
+(defcustom hyprland-ibuffer-intercept-buffer-open t
+  "When non-nil, opening mirror buffers jumps to the real Hyprland window.
+
+This applies to interactive `switch-to-buffer' and `pop-to-buffer' while
+`hyprland-ibuffer-mirror-mode' is enabled."
+  :type 'boolean
+  :group 'hyprland-ibuffer)
+
 (defvar hyprland-ibuffer--address->buffer (make-hash-table :test #'equal)
   "Map normalized window addresses to mirror buffers.")
+
+(defvar hyprland-ibuffer--suppress-kill-action nil
+  "When non-nil, mirror-buffer kill should not dispatch window close.")
 
 (defvar-local hyprland-window-address nil)
 (defvar-local hyprland-window-data nil)
@@ -94,7 +105,8 @@ This profile is used by `hyprland-ibuffer-open-native'."
 
 (define-derived-mode hyprland-window-buffer-mode special-mode "HyprWindow"
   "Major mode for mirrored Hyprland window buffers."
-  (setq buffer-read-only t))
+  (setq buffer-read-only t)
+  (add-hook 'kill-buffer-hook #'hyprland-ibuffer--on-mirror-buffer-kill nil t))
 
 (defun hyprland-ibuffer--buffer-name (window)
   "Return mirror buffer name for WINDOW alist."
@@ -122,10 +134,64 @@ This profile is used by `hyprland-ibuffer-open-native'."
       (append groups (list (hyprland-ibuffer--filter-group-spec)))
     (cons (hyprland-ibuffer--filter-group-spec) groups)))
 
-(defun hyprland-ibuffer-install-saved-filter-group ()
+(defun hyprland-ibuffer--prune-dead-index ()
+  "Remove dead buffer entries from `hyprland-ibuffer--address->buffer'."
+  (let (dead)
+    (maphash
+     (lambda (address buffer)
+       (unless (buffer-live-p buffer)
+         (push address dead)))
+     hyprland-ibuffer--address->buffer)
+    (dolist (address dead)
+      (remhash address hyprland-ibuffer--address->buffer))))
+
+(defun hyprland-ibuffer--resolve-buffer (buffer-or-name)
+  "Resolve BUFFER-OR-NAME to a live buffer object or nil."
+  (let ((buf (cond
+              ((bufferp buffer-or-name) buffer-or-name)
+              ((stringp buffer-or-name) (get-buffer buffer-or-name))
+              (t nil))))
+    (and (buffer-live-p buf) buf)))
+
+(defun hyprland-ibuffer--maybe-jump-for-buffer (buffer)
+  "Jump to Hyprland window represented by BUFFER and return non-nil if handled."
+  (when-let* ((address (hyprland-ibuffer--buffer-address buffer)))
+    (hyprland-jump address)
+    t))
+
+(defun hyprland-ibuffer--advice-switch-to-buffer (orig buffer-or-name &rest args)
+  "Redirect interactive `switch-to-buffer' when BUFFER-OR-NAME is mirror buffer."
+  (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
+    (if (and hyprland-ibuffer-intercept-buffer-open
+             (called-interactively-p 'interactive)
+             buf
+             (hyprland-ibuffer--maybe-jump-for-buffer buf))
+        (current-buffer)
+      (apply orig buffer-or-name args))))
+
+(defun hyprland-ibuffer--advice-pop-to-buffer (orig buffer-or-name &rest args)
+  "Redirect interactive `pop-to-buffer' when BUFFER-OR-NAME is mirror buffer."
+  (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
+    (if (and hyprland-ibuffer-intercept-buffer-open
+             (called-interactively-p 'interactive)
+             buf
+             (hyprland-ibuffer--maybe-jump-for-buffer buf))
+        (selected-window)
+      (apply orig buffer-or-name args))))
+
+(defun hyprland-ibuffer--on-mirror-buffer-kill ()
+  "Synchronize mirror buffer kill with Hyprland window lifecycle."
+  (when hyprland-window-address
+    (remhash hyprland-window-address hyprland-ibuffer--address->buffer)
+    (unless hyprland-ibuffer--suppress-kill-action
+      (ignore-errors
+        (hyprland-close hyprland-window-address)))))
+
+(defun hyprland-ibuffer-install-saved-filter-group (&optional quiet)
   "Install Hyprland group into `ibuffer-saved-filter-groups' profile.
 
-This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
+This uses native ibuffer saved-group mechanisms from `ibuf-ext'.
+When QUIET is non-nil, suppress user-facing message output."
   (interactive)
   (require 'ibuf-ext)
   (unless (boundp 'ibuffer-saved-filter-groups)
@@ -138,7 +204,43 @@ This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
     (if entry
         (setcdr entry groups)
       (push (cons profile groups) ibuffer-saved-filter-groups))
-    (message "Installed Hyprland ibuffer saved filter profile: %s" profile)))
+    (unless quiet
+      (message "Installed Hyprland ibuffer saved filter profile: %s" profile))))
+
+(defun hyprland-ibuffer--dead-index-count ()
+  "Return number of dead-buffer entries in mirror index."
+  (let ((count 0))
+    (maphash
+     (lambda (_address buffer)
+       (unless (buffer-live-p buffer)
+         (cl-incf count)))
+     hyprland-ibuffer--address->buffer)
+    count))
+
+(defun hyprland-ibuffer-doctor ()
+  "Repair and report Hyprland ibuffer integration health.
+
+Doctor performs lightweight self-healing:
+- prune dead mirror index entries;
+- reinstall native saved filter-group profile.
+
+Return a plist with diagnostics for scripting." 
+  (interactive)
+  (let* ((dead-before (hyprland-ibuffer--dead-index-count))
+         (_ (hyprland-ibuffer--prune-dead-index))
+         (dead-after (hyprland-ibuffer--dead-index-count))
+         (pruned (- dead-before dead-after))
+         (profile hyprland-ibuffer-saved-filter-group-profile)
+         (_ (hyprland-ibuffer-install-saved-filter-group t))
+         (report (list :dead-before dead-before
+                       :dead-after dead-after
+                       :pruned pruned
+                       :profile profile
+                       :group hyprland-ibuffer-filter-group-name)))
+    (when (called-interactively-p 'interactive)
+      (message "Hyprland ibuffer doctor: pruned=%d profile=%s group=%s"
+               pruned profile hyprland-ibuffer-filter-group-name))
+    report))
 
 
 (defun hyprland-ibuffer--render-buffer (buffer window)
@@ -176,10 +278,12 @@ This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
 (defun hyprland-ibuffer-sync-buffers ()
   "Sync mirror buffers from current `hyprland-windows' state."
   (interactive)
+  (hyprland-ibuffer--prune-dead-index)
   (let ((alive (make-hash-table :test #'equal)))
     (dolist (window (hyprland-windows))
       (let* ((address (hyprland--normalize-address (alist-get 'address window)))
-             (buffer (or (gethash address hyprland-ibuffer--address->buffer)
+             (existing (gethash address hyprland-ibuffer--address->buffer))
+             (buffer (or (and (buffer-live-p existing) existing)
                          (generate-new-buffer (hyprland-ibuffer--buffer-name window)))))
         (puthash address t alive)
         (puthash address buffer hyprland-ibuffer--address->buffer)
@@ -195,7 +299,8 @@ This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
       (dolist (it stale)
         (remhash (car it) hyprland-ibuffer--address->buffer)
         (when (buffer-live-p (cdr it))
-          (kill-buffer (cdr it)))))))
+          (let ((hyprland-ibuffer--suppress-kill-action t))
+            (kill-buffer (cdr it))))))))
 
 (defun hyprland-buffer-jump ()
   "Focus Hyprland window represented by current buffer."
@@ -225,7 +330,7 @@ This command relies on `ibuffer-saved-filter-groups' and
 `ibuffer-switch-to-saved-filter-groups' from `ibuf-ext'."
   (interactive)
   (require 'ibuf-ext)
-  (hyprland-ibuffer-install-saved-filter-group)
+  (hyprland-ibuffer-install-saved-filter-group t)
   (ibuffer nil "*Ibuffer-hyprland*")
   (when-let* ((buf (get-buffer "*Ibuffer-hyprland*")))
     (with-current-buffer buf
@@ -307,8 +412,14 @@ Hyprland ibuffer view to preserve ibuffer muscle memory."
   (if hyprland-ibuffer-mirror-mode
       (progn
         (add-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
+        (unless (advice-member-p #'hyprland-ibuffer--advice-switch-to-buffer 'switch-to-buffer)
+          (advice-add 'switch-to-buffer :around #'hyprland-ibuffer--advice-switch-to-buffer))
+        (unless (advice-member-p #'hyprland-ibuffer--advice-pop-to-buffer 'pop-to-buffer)
+          (advice-add 'pop-to-buffer :around #'hyprland-ibuffer--advice-pop-to-buffer))
         (ignore-errors (hyprland-ibuffer-sync-buffers)))
-    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)))
+    (remove-hook 'hyprland-after-refresh-hook #'hyprland-ibuffer-sync-buffers)
+    (advice-remove 'switch-to-buffer #'hyprland-ibuffer--advice-switch-to-buffer)
+    (advice-remove 'pop-to-buffer #'hyprland-ibuffer--advice-pop-to-buffer)))
 
 (provide 'hyprland-ibuffer)
 ;;; hyprland-ibuffer.el ends here

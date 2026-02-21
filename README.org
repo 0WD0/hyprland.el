@@ -51,6 +51,7 @@ Core commands:
 - ~M-x hyprland-jump~: focus a window by address
 - ~M-x hyprland-close~: close a window by address
 - ~M-x hyprland-tag~: apply ~+foo/-foo/foo~ tag op
+- ~M-x hyprland-ibuffer-doctor~: repair ibuffer profile/index drift
 - ~M-x hyprland-sync-stop~: stop socket/timers
 
 * Toplevel helper (recommended)
@@ -80,11 +81,15 @@ Enable mirror mode once:
 Open Hyprland-only ibuffer view:
 
 - ~M-x hyprland-ibuffer-open~ (native saved filter-group profile)
-- ~M-x hyprland-ibuffer-install-saved-filter-group~ (install/update profile only)
+
+You normally do not need to run install commands manually:
+~hyprland-ibuffer-open~ auto-installs/updates the Hyprland saved filter profile.
 
 This view uses Hyprland-focused columns:
 
 - Workspace, Class, Title, Address, PID
+- Killing a Hyprland mirror buffer closes its corresponding Hyprland window
+- Opening a mirror buffer can be redirected to window jump (see customization)
 
 Inside this ibuffer view, existing ibuffer commands are remapped:
 
@@ -111,6 +116,7 @@ Important options:
 - ~hyprland-ibuffer-filter-group-name~: display name of Hyprland filter group
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
 - ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command
+- ~hyprland-ibuffer-intercept-buffer-open~: redirect interactive open-buffer actions into ~hyprland-jump~
 
 Reconcile defaults (already tuned):
 
@@ -145,6 +151,21 @@ Reload updated package files:
 
 Ensure you opened the special view via ~hyprland-ibuffer-open~ and that
 ~hyprland-ibuffer-view-mode~ is enabled in that ibuffer buffer.
+
+** Ibuffer filter-group errors
+
+If ibuffer reports an undefined Hyprland filter, reinstall the saved profile:
+
+#+begin_src emacs-lisp
+(hyprland-ibuffer-install-saved-filter-group)
+(hyprland-ibuffer-open)
+#+end_src
+
+You can also run a one-shot repair + diagnostics command:
+
+#+begin_src emacs-lisp
+(hyprland-ibuffer-doctor)
+#+end_src
 
 * Development
 
