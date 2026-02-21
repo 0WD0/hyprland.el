@@ -23,6 +23,32 @@
 
 (defvar-local hyprland-window-address nil)
 (defvar-local hyprland-window-data nil)
+(defvar-local hyprland-window-title nil)
+(defvar-local hyprland-window-class nil)
+(defvar-local hyprland-window-workspace nil)
+(defvar-local hyprland-window-pid nil)
+
+(define-ibuffer-column hypr-ws
+  (:name "WS")
+  (or hyprland-window-workspace ""))
+
+(define-ibuffer-column hypr-class
+  (:name "Class")
+  (or hyprland-window-class ""))
+
+(define-ibuffer-column hypr-title
+  (:name "Title")
+  (or hyprland-window-title ""))
+
+(define-ibuffer-column hypr-address
+  (:name "Address")
+  (or hyprland-window-address ""))
+
+(define-ibuffer-column hypr-pid
+  (:name "PID")
+  (if hyprland-window-pid
+      (format "%s" hyprland-window-pid)
+    ""))
 
 (defvar-keymap hyprland-window-buffer-mode-map
   :doc "Keymap for `hyprland-window-buffer-mode'."
@@ -56,26 +82,45 @@
         (addr (or (alist-get 'address window) "?")))
     (format "*hypr:%s (%s) <%s>*" title class addr)))
 
+(defun hyprland-ibuffer--workspace-string (window)
+  "Return workspace display string for WINDOW alist."
+  (let ((ws (alist-get 'workspace window)))
+    (cond
+     ((and (listp ws) (alist-get 'name ws)) (format "%s" (alist-get 'name ws)))
+     ((and (listp ws) (alist-get 'id ws)) (format "%s" (alist-get 'id ws)))
+     (t "?"))))
+
 (defun hyprland-ibuffer--render-buffer (buffer window)
   "Render WINDOW metadata into BUFFER and update local state."
   (with-current-buffer buffer
     (unless (derived-mode-p 'hyprland-window-buffer-mode)
       (hyprland-window-buffer-mode))
     (setq hyprland-window-data window
-          hyprland-window-address (hyprland--normalize-address (alist-get 'address window)))
-    (let ((inhibit-read-only t)
-          (ws (alist-get 'workspace window)))
+          hyprland-window-address (hyprland--normalize-address (alist-get 'address window))
+          hyprland-window-title (or (alist-get 'title window) "")
+          hyprland-window-class (or (alist-get 'class window) "")
+          hyprland-window-workspace (hyprland-ibuffer--workspace-string window)
+          hyprland-window-pid (alist-get 'pid window))
+    (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert (format "Title: %s\n" (or (alist-get 'title window) "")))
-      (insert (format "Class: %s\n" (or (alist-get 'class window) "")))
+      (insert (format "Title: %s\n" hyprland-window-title))
+      (insert (format "Class: %s\n" hyprland-window-class))
       (insert (format "Address: %s\n" hyprland-window-address))
-      (insert (format "Workspace: %s\n"
-                      (cond
-                       ((and (listp ws) (alist-get 'name ws)) (alist-get 'name ws))
-                       ((and (listp ws) (alist-get 'id ws)) (alist-get 'id ws))
-                       (t "?"))))
-      (insert (format "PID: %s\n" (or (alist-get 'pid window) "")))
+      (insert (format "Workspace: %s\n" hyprland-window-workspace))
+      (insert (format "PID: %s\n" (or hyprland-window-pid "")))
       (goto-char (point-min)))))
+
+(defun hyprland-ibuffer--apply-formats ()
+  "Apply Hyprland-focused ibuffer columns to current ibuffer buffer."
+  (setq-local
+   ibuffer-formats
+   '((mark modified read-only locked
+      " " (name 20 20 :left :elide)
+      " " (hypr-ws 6 6 :left)
+      " " (hypr-class 12 12 :left :elide)
+      " " (hypr-title 28 28 :left :elide)
+      " " (hypr-address 16 16 :left)
+      " " (hypr-pid 7 7 :right)))))
 
 (defun hyprland-ibuffer-sync-buffers ()
   "Sync mirror buffers from current `hyprland-windows' state."
@@ -130,7 +175,9 @@
     (with-current-buffer buf
       (ibuffer-filter-disable)
       (ibuffer-filter-by-derived-mode 'hyprland-window-buffer-mode)
-      (hyprland-ibuffer-view-mode 1))))
+      (hyprland-ibuffer--apply-formats)
+      (hyprland-ibuffer-view-mode 1)
+      (ibuffer-update nil t))))
 
 (defun hyprland-ibuffer--mirror-buffer-at-point ()
   "Return Hyprland mirror buffer represented by current ibuffer row."

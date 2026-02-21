@@ -81,6 +81,10 @@ Open Hyprland-only ibuffer view:
 
 - ~M-x hyprland-ibuffer-open~
 
+This view uses Hyprland-focused columns:
+
+- Workspace, Class, Title, Address, PID
+
 Inside this ibuffer view, existing ibuffer commands are remapped:
 
 - ~RET~, ~f~, ~e~, ~o~, ~M-o~ -> jump to Hyprland window

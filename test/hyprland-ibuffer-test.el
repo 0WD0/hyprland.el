@@ -35,8 +35,11 @@
      (let ((buf (gethash "0xaaa" hyprland-ibuffer--address->buffer)))
        (should (buffer-live-p buf))
        (with-current-buffer buf
-         (should (derived-mode-p 'hyprland-window-buffer-mode))
-         (should (equal hyprland-window-address "0xaaa")))))))
+          (should (derived-mode-p 'hyprland-window-buffer-mode))
+          (should (equal hyprland-window-address "0xaaa"))
+          (should (equal hyprland-window-workspace "1"))
+          (should (equal hyprland-window-class "zen"))
+          (should (equal hyprland-window-title "A")))))))
 
 (ert-deftest hyprland-ibuffer-test-sync-removes-stale-buffers ()
   (hyprland-ibuffer-test--with-clean-state
@@ -128,6 +131,34 @@
               #'hyprland-ibuffer-jump-at-point))
   (should (eq (lookup-key hyprland-ibuffer-view-mode-map [remap ibuffer-do-kill-lines])
               #'hyprland-ibuffer-close-marked-or-current)))
+
+(ert-deftest hyprland-ibuffer-test-open-applies-custom-formats ()
+  (let ((ibuf (get-buffer-create "*Ibuffer-hyprland*"))
+        captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer ibuf
+            (ibuffer-mode))
+          (cl-letf (((symbol-function 'ibuffer)
+                     (lambda (&optional _name _bufname)
+                       (setq captured t)
+                       (with-current-buffer ibuf
+                         (ibuffer-mode))
+                       ibuf))
+                    ((symbol-function 'ibuffer-filter-disable) #'ignore)
+                    ((symbol-function 'ibuffer-filter-by-derived-mode) #'ignore)
+                    ((symbol-function 'ibuffer-update) #'ignore))
+            (hyprland-ibuffer-open)
+            (should captured)
+            (with-current-buffer ibuf
+              (should hyprland-ibuffer-view-mode)
+              (should (local-variable-p 'ibuffer-formats))
+              (let ((fmt (car ibuffer-formats)))
+                (should (member '(hypr-ws 6 6 :left) fmt))
+                (should (member '(hypr-class 12 12 :left :elide) fmt))
+                (should (member '(hypr-title 28 28 :left :elide) fmt))
+                (should (member '(hypr-address 16 16 :left) fmt))))))
+      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
 
 (provide 'hyprland-ibuffer-test)
 ;;; hyprland-ibuffer-test.el ends here
