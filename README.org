@@ -80,6 +80,7 @@ Enable mirror mode once:
 Open Hyprland-only ibuffer view:
 
 - ~M-x hyprland-ibuffer-open~
+- ~M-x hyprland-ibuffer-open-native~ (uses ibuffer saved filter-group profile)
 
 This view uses Hyprland-focused columns:
 
@@ -112,6 +113,7 @@ Important options:
 - ~hyprland-ibuffer-auto-filter-group~: enable/disable auto "Hyprland" group in ibuffer
 - ~hyprland-ibuffer-filter-group-name~: display name of Hyprland filter group
 - ~hyprland-ibuffer-filter-group-position~: place group at beginning or end
+- ~hyprland-ibuffer-saved-filter-group-profile~: ibuffer saved-group profile name used by native open command
 
 Reconcile defaults (already tuned):
 

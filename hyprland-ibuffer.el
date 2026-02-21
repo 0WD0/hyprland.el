@@ -14,6 +14,9 @@
 (require 'ibuffer)
 (require 'hyprland-sync)
 
+(declare-function ibuffer-switch-to-saved-filter-groups "ibuf-ext" (name))
+(defvar ibuffer-saved-filter-groups)
+
 (defgroup hyprland-ibuffer nil
   "Ibuffer integration for hyprland.el."
   :group 'hyprland)
@@ -32,6 +35,13 @@
   "Where to insert the Hyprland filter group in `ibuffer-filter-groups'."
   :type '(choice (const :tag "At beginning" prepend)
           (const :tag "At end" append))
+  :group 'hyprland-ibuffer)
+
+(defcustom hyprland-ibuffer-saved-filter-group-profile "hyprland"
+  "Name of `ibuffer-saved-filter-groups' profile managed by Hyprland helpers.
+
+This profile is used by `hyprland-ibuffer-open-native'."
+  :type 'string
   :group 'hyprland-ibuffer)
 
 (defvar hyprland-ibuffer--address->buffer (make-hash-table :test #'equal)
@@ -111,6 +121,12 @@
   (list hyprland-ibuffer-filter-group-name
         '(mode . hyprland-window-buffer-mode)))
 
+(defun hyprland-ibuffer--insert-group (groups)
+  "Insert Hyprland group into GROUPS according to position preference."
+  (if (eq hyprland-ibuffer-filter-group-position 'append)
+      (append groups (list (hyprland-ibuffer--filter-group-spec)))
+    (cons (hyprland-ibuffer--filter-group-spec) groups)))
+
 (defun hyprland-ibuffer--ensure-filter-group ()
   "Ensure current ibuffer buffer has a dedicated Hyprland filter group."
   (when (and hyprland-ibuffer-auto-filter-group
@@ -121,10 +137,24 @@
              (groups (or ibuffer-filter-groups nil)))
         (unless (assoc name groups)
           (setq-local ibuffer-filter-groups
-                      (if (eq hyprland-ibuffer-filter-group-position 'append)
-                          (append groups (list (hyprland-ibuffer--filter-group-spec)))
-                        (cons (hyprland-ibuffer--filter-group-spec) groups)))
+                      (hyprland-ibuffer--insert-group groups))
           (ibuffer-update nil t))))))
+
+(defun hyprland-ibuffer-install-saved-filter-group ()
+  "Install Hyprland group into `ibuffer-saved-filter-groups' profile.
+
+This uses native ibuffer saved-group mechanisms from `ibuf-ext'."
+  (interactive)
+  (require 'ibuf-ext)
+  (let* ((profile hyprland-ibuffer-saved-filter-group-profile)
+         (entry (assoc profile ibuffer-saved-filter-groups))
+         (groups (if entry (copy-tree (cdr entry)) nil))
+         (groups (assoc-delete-all hyprland-ibuffer-filter-group-name groups))
+         (groups (hyprland-ibuffer--insert-group groups)))
+    (if entry
+        (setcdr entry groups)
+      (push (cons profile groups) ibuffer-saved-filter-groups))
+    (message "Installed Hyprland ibuffer saved filter profile: %s" profile)))
 
 (defun hyprland-ibuffer--remove-filter-group ()
   "Remove Hyprland filter group from current ibuffer buffer, if present."
@@ -229,6 +259,23 @@
     (with-current-buffer buf
       (ibuffer-filter-disable)
       (ibuffer-filter-by-derived-mode 'hyprland-window-buffer-mode)
+      (hyprland-ibuffer--apply-formats)
+      (hyprland-ibuffer-view-mode 1)
+      (ibuffer-update nil t))))
+
+(defun hyprland-ibuffer-open-native ()
+  "Open ibuffer using native saved filter-group profile for Hyprland.
+
+This command relies on `ibuffer-saved-filter-groups' and
+`ibuffer-switch-to-saved-filter-groups' from `ibuf-ext'."
+  (interactive)
+  (require 'ibuf-ext)
+  (hyprland-ibuffer-install-saved-filter-group)
+  (ibuffer nil "*Ibuffer-hyprland*")
+  (when-let* ((buf (get-buffer "*Ibuffer-hyprland*")))
+    (with-current-buffer buf
+      (ibuffer-switch-to-saved-filter-groups
+       hyprland-ibuffer-saved-filter-group-profile)
       (hyprland-ibuffer--apply-formats)
       (hyprland-ibuffer-view-mode 1)
       (ibuffer-update nil t))))
