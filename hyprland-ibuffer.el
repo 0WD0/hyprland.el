@@ -29,11 +29,16 @@
   "g" #'hyprland-buffer-jump
   "k" #'hyprland-buffer-close)
 
-(defvar-keymap hyprland-ibuffer-view-mode-map
-  :doc "Keymap for direct actions in Hyprland ibuffer view."
-  "J" #'hyprland-ibuffer-jump-at-point
-  "K" #'hyprland-ibuffer-close-at-point
-  "T" #'hyprland-ibuffer-tag-at-point)
+(defvar hyprland-ibuffer-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [remap ibuffer-visit-buffer] #'hyprland-ibuffer-jump-at-point)
+    (define-key map [remap ibuffer-visit-buffer-other-window] #'hyprland-ibuffer-jump-at-point)
+    (define-key map [remap ibuffer-visit-buffer-other-window-noselect] #'hyprland-ibuffer-jump-at-point)
+    (define-key map [remap ibuffer-visit-buffer-other-frame] #'hyprland-ibuffer-jump-at-point)
+    (define-key map [remap ibuffer-visit-buffer-1-window] #'hyprland-ibuffer-jump-at-point)
+    (define-key map [remap ibuffer-do-kill-lines] #'hyprland-ibuffer-close-marked-or-current)
+    map)
+  "Keymap for direct actions in Hyprland ibuffer view.")
 
 (define-minor-mode hyprland-ibuffer-view-mode
   "Minor mode for direct Hyprland actions inside ibuffer."
@@ -137,6 +142,14 @@
       (user-error "Current row is not a Hyprland mirror buffer"))
     buffer))
 
+(defun hyprland-ibuffer--buffer-address (buffer)
+  "Return normalized window address represented by mirror BUFFER.
+
+Return nil when BUFFER is not a Hyprland mirror buffer."
+  (when (and (buffer-live-p buffer)
+             (buffer-local-value 'hyprland-window-address buffer))
+    (buffer-local-value 'hyprland-window-address buffer)))
+
 (defun hyprland-ibuffer-jump-at-point ()
   "Jump to Hyprland window represented by current ibuffer row."
   (interactive)
@@ -150,6 +163,27 @@
   (let ((buffer (hyprland-ibuffer--mirror-buffer-at-point)))
     (with-current-buffer buffer
       (hyprland-buffer-close))))
+
+(defun hyprland-ibuffer-close-marked-or-current ()
+  "Close marked Hyprland windows in ibuffer, or close current row.
+
+This remaps `ibuffer-do-kill-lines' (default key: `k') inside
+Hyprland ibuffer view to preserve ibuffer muscle memory."
+  (interactive)
+  (unless (derived-mode-p 'ibuffer-mode)
+    (user-error "Not in ibuffer"))
+  (let* ((marked (ibuffer-get-marked-buffers))
+         (targets (if marked
+                      marked
+                    (list (ibuffer-current-buffer t))))
+         (count 0))
+    (dolist (buf targets)
+      (when-let* ((address (hyprland-ibuffer--buffer-address buf)))
+        (hyprland-close address)
+        (cl-incf count)))
+    (if (> count 0)
+        (message "Closed %d Hyprland window(s)" count)
+      (user-error "No Hyprland windows in selection"))))
 
 (defun hyprland-ibuffer-tag-at-point (tag-op)
   "Tag Hyprland window at current ibuffer row using TAG-OP."

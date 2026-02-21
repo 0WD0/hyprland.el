@@ -28,5 +28,26 @@
       (should (equal (hyprland-preview--capture-args window)
                      '("-g" "1,2 3x4" "-"))))))
 
+(ert-deftest hyprland-preview-test-needs-focus/hidden-window ()
+  (let ((window '((hidden . 1))))
+    (cl-letf (((symbol-function 'hyprland-preview--active-workspace-id)
+               (lambda () 1)))
+      (should (hyprland-preview--needs-focus-for-capture-p window)))))
+
+(ert-deftest hyprland-preview-test-needs-focus/workspace-mismatch ()
+  (let ((window '((workspace . ((id . 3))))))
+    (cl-letf (((symbol-function 'hyprland-preview--active-workspace-id)
+               (lambda () 1)))
+      (should (hyprland-preview--needs-focus-for-capture-p window)))))
+
+(ert-deftest hyprland-preview-test-restore-focus-dispatches-and-clears ()
+  (let ((hyprland-preview--active-restore-address "0xabc")
+        seen)
+    (cl-letf (((symbol-function 'hyprland--dispatch)
+               (lambda (_dispatcher arg) (setq seen arg))))
+      (hyprland-preview--restore-focus)
+      (should (equal seen "address:0xabc"))
+      (should-not hyprland-preview--active-restore-address))))
+
 (provide 'hyprland-preview-test)
 ;;; hyprland-preview-test.el ends here

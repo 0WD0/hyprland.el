@@ -95,5 +95,39 @@
       (when (buffer-live-p mirror) (kill-buffer mirror))
       (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
 
+(ert-deftest hyprland-ibuffer-test-close-marked-or-current/uses-marked ()
+  (let* ((mirror-a (get-buffer-create "*hypr-mirror-a*"))
+         (mirror-b (get-buffer-create "*hypr-mirror-b*"))
+         (ibuf (get-buffer-create "*hypr-ibuf*"))
+         (closed nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer mirror-a
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0xaaa"))
+          (with-current-buffer mirror-b
+            (hyprland-window-buffer-mode)
+            (setq hyprland-window-address "0xbbb"))
+          (with-current-buffer ibuf
+            (ibuffer-mode)
+            (cl-letf (((symbol-function 'ibuffer-get-marked-buffers)
+                       (lambda () (list mirror-a mirror-b)))
+                      ((symbol-function 'ibuffer-current-buffer)
+                       (lambda (&optional _mark) mirror-a))
+                      ((symbol-function 'hyprland-close)
+                       (lambda (address) (push address closed))))
+              (hyprland-ibuffer-close-marked-or-current)
+              (should (equal (sort closed #'string<)
+                             '("0xaaa" "0xbbb"))))))
+      (when (buffer-live-p mirror-a) (kill-buffer mirror-a))
+      (when (buffer-live-p mirror-b) (kill-buffer mirror-b))
+      (when (buffer-live-p ibuf) (kill-buffer ibuf)))))
+
+(ert-deftest hyprland-ibuffer-test-keymap-remaps-ibuffer-commands ()
+  (should (eq (lookup-key hyprland-ibuffer-view-mode-map [remap ibuffer-visit-buffer])
+              #'hyprland-ibuffer-jump-at-point))
+  (should (eq (lookup-key hyprland-ibuffer-view-mode-map [remap ibuffer-do-kill-lines])
+              #'hyprland-ibuffer-close-marked-or-current)))
+
 (provide 'hyprland-ibuffer-test)
 ;;; hyprland-ibuffer-test.el ends here

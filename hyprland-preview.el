@@ -16,9 +16,24 @@
 (defvar hyprland-preview--cache (make-hash-table :test #'equal))
 (defvar hyprland-preview--active-process nil)
 (defvar hyprland-preview--active-token 0)
+(defvar hyprland-preview--active-restore-address nil)
 
 (defcustom hyprland-preview-ttl-seconds 20
   "Maximum age of cached previews in seconds."
+  :type 'integer
+  :group 'hyprland)
+
+(defcustom hyprland-preview-focus-for-accurate-capture t
+  "When non-nil, temporarily focus hidden/off-workspace window before capture.
+
+Wayland screencopy captures visible composition.  For hidden, stacked, or
+off-workspace windows, this option improves correctness by focusing target
+window briefly and restoring prior focus after capture."
+  :type 'boolean
+  :group 'hyprland)
+
+(defcustom hyprland-preview-focus-settle-ms 60
+  "Delay after focus switch before screenshot capture starts."
   :type 'integer
   :group 'hyprland)
 
@@ -123,7 +138,66 @@ Signal an error if neither mode can be formed."
   "Cancel the currently active capture process, if any."
   (when (process-live-p hyprland-preview--active-process)
     (delete-process hyprland-preview--active-process))
-  (setq hyprland-preview--active-process nil))
+  (setq hyprland-preview--active-process nil)
+  (hyprland-preview--restore-focus))
+
+(defun hyprland-preview--active-window-address ()
+  "Return normalized address for current active window, or nil."
+  (condition-case nil
+      (when-let* ((active (hyprland--hyprctl-json "activewindow"))
+                  (address (alist-get 'address active)))
+        (hyprland--normalize-address address))
+    (error nil)))
+
+(defun hyprland-preview--active-workspace-id ()
+  "Return active workspace id, or nil when unavailable."
+  (condition-case nil
+      (when-let* ((active (hyprland--hyprctl-json "activeworkspace"))
+                  (id (alist-get 'id active)))
+        id)
+    (error nil)))
+
+(defun hyprland-preview--window-workspace-id (window)
+  "Return workspace id for WINDOW alist, or nil."
+  (let ((ws (alist-get 'workspace window)))
+    (and (listp ws) (alist-get 'id ws))))
+
+(defun hyprland-preview--hidden-window-p (window)
+  "Return non-nil if WINDOW is marked hidden."
+  (let ((hidden (alist-get 'hidden window)))
+    (or (eq hidden t)
+        (eq hidden 1)
+        (equal hidden "1"))))
+
+(defun hyprland-preview--needs-focus-for-capture-p (window)
+  "Return non-nil when WINDOW likely needs focus for accurate screenshot."
+  (or (hyprland-preview--hidden-window-p window)
+      (let ((wid (hyprland-preview--window-workspace-id window))
+            (aid (hyprland-preview--active-workspace-id)))
+        (and wid aid (not (equal wid aid))))))
+
+(defun hyprland-preview--restore-focus ()
+  "Restore focus to previously active window when recorded."
+  (when (stringp hyprland-preview--active-restore-address)
+    (let ((restore hyprland-preview--active-restore-address))
+      (setq hyprland-preview--active-restore-address nil)
+      (ignore-errors
+        (hyprland--dispatch "focuswindow" (format "address:%s" restore))))))
+
+(defun hyprland-preview--prepare-focus-for-capture (window)
+  "Prepare focus for accurate capture of WINDOW.
+
+Return non-nil when focus was switched and must later be restored."
+  (when (and hyprland-preview-focus-for-accurate-capture
+             (hyprland-preview--needs-focus-for-capture-p window))
+    (let* ((current (hyprland-preview--active-window-address))
+           (target (hyprland--normalize-address (alist-get 'address window))))
+      (when (and current target (not (equal current target)))
+        (ignore-errors
+          (hyprland--dispatch "focuswindow" (format "address:%s" target))
+          (setq hyprland-preview--active-restore-address current)
+          (sleep-for (max 0.0 (/ (max 0 hyprland-preview-focus-settle-ms) 1000.0)))
+          t)))))
 
 (defun hyprland-preview-request (window callback)
   "Request screenshot preview for WINDOW, delivering to CALLBACK.
@@ -149,6 +223,7 @@ Requests are single-flight: starting a new request cancels the prior one."
                                 (list :ok nil :reason 'no-capture-args :message (error-message-string err)))
                        nil))))
           (when args
+            (hyprland-preview--prepare-focus-for-capture window)
             (let ((chunks nil))
               (setq hyprland-preview--active-process
                     (make-process
@@ -165,6 +240,7 @@ Requests are single-flight: starting a new request cancels the prior one."
                        (when (and (= token hyprland-preview--active-token)
                                   (memq (process-status process) '(exit signal)))
                          (setq hyprland-preview--active-process nil)
+                         (hyprland-preview--restore-focus)
                          (if (and (eq (process-status process) 'exit)
                                   (= (process-exit-status process) 0))
                              (let ((bytes (apply #'concat (nreverse chunks))))
