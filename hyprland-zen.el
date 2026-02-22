@@ -731,16 +731,20 @@ Active tabs are sorted first, then by title."
 
 (defun hyprland-zen--process-filter (_proc chunk)
   "Accumulate CHUNK and dispatch complete JSON lines."
-  (setq hyprland-zen--fragment (concat hyprland-zen--fragment chunk))
-  (let ((start 0)
+  ;; Use a local snapshot buffer so callbacks cannot corrupt indexing by
+  ;; mutating `hyprland-zen--fragment' (e.g. stop/restart in hooks/errors).
+  (let ((stream (concat hyprland-zen--fragment chunk))
+        (start 0)
         line)
-    (while (string-match "\n" hyprland-zen--fragment start)
-      (setq line (substring hyprland-zen--fragment start (match-beginning 0)))
+    (while (string-match "\n" stream start)
+      (setq line (substring stream start (match-beginning 0)))
       (setq start (match-end 0))
       (unless (string-empty-p line)
         (hyprland-zen--handle-line line)))
     (setq hyprland-zen--fragment
-          (substring hyprland-zen--fragment start))))
+          (if (< start (length stream))
+              (substring stream start)
+            ""))))
 
 (defun hyprland-zen--process-sentinel (proc event)
   "Handle Zen host PROC lifecycle EVENT."

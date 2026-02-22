@@ -98,6 +98,19 @@
       (should (equal (nreverse seen) '("{\"type\":\"upsert\"}")))
       (should (string-empty-p hyprland-zen--fragment)))))
 
+(ert-deftest hyprland-zen-test-process-filter/reentrant-fragment-mutation-safe ()
+  (let ((hyprland-zen--fragment "")
+        seen)
+    (cl-letf (((symbol-function 'hyprland-zen--handle-line)
+               (lambda (line)
+                 ;; Simulate callback side-effect (stop/restart) mutating fragment.
+                 (setq hyprland-zen--fragment "")
+                 (push line seen))))
+      (hyprland-zen--process-filter nil "{\"type\":\"snapshot\"}\n{\"type\":\"upsert\"}\n")
+      (should (equal (nreverse seen)
+                     '("{\"type\":\"snapshot\"}" "{\"type\":\"upsert\"}")))
+      (should (string-empty-p hyprland-zen--fragment)))))
+
 (ert-deftest hyprland-zen-test-send/encodes-json-line ()
   (let ((hyprland-zen--process 'proc)
         (hyprland-zen--messages-out 0)
