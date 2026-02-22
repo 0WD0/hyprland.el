@@ -258,12 +258,13 @@ Return non-nil when jump was dispatched."
            (image-type (pcase raw-type
                          ((or "jpg" "jpeg") 'jpeg)
                          ("png" 'png)
-                         (_ (intern raw-type))))
+                         (_ nil)))
            (body (match-string 2 data-url)))
-      (condition-case _err
-          (list :bytes (base64-decode-string body)
-                :type image-type)
-        (error nil)))))
+      (when image-type
+        (condition-case _err
+            (list :bytes (base64-decode-string body)
+                  :type image-type)
+          (error nil))))))
 
 (defun hyprland-zen--display-preview-message (message)
   "Display textual preview MESSAGE using shared Consult preview UI."

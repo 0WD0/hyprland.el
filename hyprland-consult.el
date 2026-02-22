@@ -65,7 +65,7 @@ Examples:
   (pcase image-type
     ('png (hyprland-consult--bytes-prefix-p bytes '(137 80 78 71 13 10 26 10)))
     ('jpeg (hyprland-consult--bytes-prefix-p bytes '(255 216 255)))
-    (_ t)))
+    (_ nil)))
 
 (defun hyprland-consult--candidates ()
   "Build completion alist `(DISPLAY . WINDOW)' for selection.
