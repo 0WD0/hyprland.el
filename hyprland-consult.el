@@ -52,6 +52,21 @@ Examples:
          (addr (or (alist-get 'address window) "?")))
     (format "[%s] %s (%s) <%s>" ws-name title class addr)))
 
+(defun hyprland-consult--bytes-prefix-p (bytes prefix)
+  "Return non-nil when BYTES starts with PREFIX integer list."
+  (and (stringp bytes)
+       (>= (length bytes) (length prefix))
+       (cl-loop for b in prefix
+                for i from 0
+                always (= (aref bytes i) b))))
+
+(defun hyprland-consult--valid-image-bytes-p (bytes image-type)
+  "Return non-nil when BYTES header matches IMAGE-TYPE format magic."
+  (pcase image-type
+    ('png (hyprland-consult--bytes-prefix-p bytes '(137 80 78 71 13 10 26 10)))
+    ('jpeg (hyprland-consult--bytes-prefix-p bytes '(255 216 255)))
+    (_ t)))
+
 (defun hyprland-consult--candidates ()
   "Build completion alist `(DISPLAY . WINDOW)' for selection.
 
@@ -77,7 +92,8 @@ return action both receive the same structured value."
            (condition-case err
                (if (and bytes
                         (display-images-p)
-                        (image-type-available-p image-type))
+                        (image-type-available-p image-type)
+                        (hyprland-consult--valid-image-bytes-p bytes image-type))
                    (progn
                      (set-buffer-multibyte nil)
                      (insert-image (create-image bytes image-type t :scale 0.45))

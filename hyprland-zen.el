@@ -302,12 +302,16 @@ ACTION and CAND follow Consult's :state contract."
              (hyprland-zen--display-preview-message "Candidate missing tab metadata")
            (setq hyprland-zen--preview-tab-id tab-id)
            (hyprland-zen--display-preview-message "Loading tab preview...")
-           (condition-case err
-               (hyprland-zen--send `((op . "capture-tab")
-                                     (tab_id . ,tab-id)))
-             (error
-              (hyprland-zen--display-preview-message
-               (format "Preview request failed: %s" (error-message-string err)))))))))
+           (if (or hyprland-zen--bridge-connected
+                   (not (and (stringp hyprland-zen--last-error-message)
+                             (string-match-p "browser-bridge-" hyprland-zen--last-error-message))))
+               (condition-case err
+                   (hyprland-zen--send `((op . "capture-tab")
+                                         (tab_id . ,tab-id)))
+                 (error
+                  (hyprland-zen--display-preview-message
+                   (format "Preview request failed: %s" (error-message-string err)))))
+             (hyprland-zen--display-preview-message "Bridge reconnecting; preview deferred"))))))
     ((or 'exit 'return)
      (setq hyprland-zen--preview-tab-id nil)
      (setq hyprland-zen--preview-candidates nil)
@@ -831,7 +835,7 @@ Active tabs are sorted first, then by title."
            (hyprland-zen--maybe-restart-native-host reason)))
        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
-         (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
+         (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces"))
            (hyprland-zen--notify-error op err-message)))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
