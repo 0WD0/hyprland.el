@@ -343,6 +343,14 @@ ACTION and CAND follow Consult's :state contract."
   (setq hyprland-zen--last-error-message (hyprland-zen--string message)
         hyprland-zen--last-error-op (hyprland-zen--string op)))
 
+(defun hyprland-zen--clear-bridge-disconnect-error ()
+  "Clear stale disconnect diagnostics when bridge has recovered."
+  (when (and (stringp hyprland-zen--last-error-message)
+             (or (string-match-p "browser-bridge-not-connected" hyprland-zen--last-error-message)
+                 (string-match-p "browser-bridge-disconnected" hyprland-zen--last-error-message)))
+    (setq hyprland-zen--last-error-message nil
+          hyprland-zen--last-error-op nil)))
+
 (defun hyprland-zen--maybe-restart-native-host (reason)
   "Restart stale native adapter process when REASON repeats too often."
   (when (and hyprland-zen-native-host-auto-restart
@@ -723,6 +731,7 @@ Active tabs are sorted first, then by title."
        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
        (setq hyprland-zen--bridge-connected t
              hyprland-zen--queued-op-count 0)
+       (hyprland-zen--clear-bridge-disconnect-error)
        (hyprland-zen--clear-store)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
@@ -735,6 +744,7 @@ Active tabs are sorted first, then by title."
       ((or "workspace-snapshot" "workspace_snapshot")
        (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
        (setq hyprland-zen--bridge-connected t)
+       (hyprland-zen--clear-bridge-disconnect-error)
        (clrhash hyprland-zen--workspaces)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
@@ -762,6 +772,10 @@ Active tabs are sorted first, then by title."
              (hyprland-zen--truthy-p (hyprland-zen--field message 'connected))
              hyprland-zen--bridge-last-reason
              (hyprland-zen--string (hyprland-zen--field message 'reason)))
+       (when hyprland-zen--bridge-connected
+         (setq hyprland-zen--queued-op-count 0
+               hyprland-zen--bridge-not-connected-streak 0)
+         (hyprland-zen--clear-bridge-disconnect-error))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
       ("queued"

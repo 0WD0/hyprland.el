@@ -337,6 +337,12 @@ Optional timeout override for doctor:
 HYPRLAND_ZEN_CHECK_TIMEOUT=10 bash scripts/hyprland-zen-test.sh doctor
 #+end_src
 
+Keep existing line host (disable default reset in test harness):
+
+#+begin_src bash
+HYPRLAND_ZEN_TEST_RESET_HOST=0 bash scripts/hyprland-zen-test.sh doctor
+#+end_src
+
 ** Consult state arity error
 
 Reload updated package files:

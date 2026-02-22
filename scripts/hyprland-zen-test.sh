@@ -12,6 +12,13 @@ fi
 
 MODE="${1:-all}"
 
+reset_line_bridge_if_enabled() {
+	if [[ "${HYPRLAND_ZEN_TEST_RESET_HOST:-1}" != "0" ]]; then
+		pkill -f "hyprland-zen-native-host --line-stdio" >/dev/null 2>&1 || true
+		sleep 0.2
+	fi
+}
+
 run_unit() {
 	echo "[hyprland-zen-test] running unit tests (test/hyprland-zen-test.el)"
 	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l test/hyprland-zen-test.el -f ert-run-tests-batch-and-exit
@@ -19,11 +26,13 @@ run_unit() {
 
 run_doctor() {
 	echo "[hyprland-zen-test] running runtime doctor (non-interactive)"
+	reset_line_bridge_if_enabled
 	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l hyprland.el -l scripts/hyprland-zen-check.el
 }
 
 run_live() {
 	echo "[hyprland-zen-test] running live smoke test (requires Zen extension + native host)"
+	reset_line_bridge_if_enabled
 	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l hyprland.el -l scripts/hyprland-zen-live-runner.el
 }
 
@@ -53,6 +62,7 @@ Usage: scripts/hyprland-zen-test.sh [all|unit|doctor|live]
 
 Environment:
   HYPRLAND_ZEN_CHECK_TIMEOUT=8.0  Override doctor timeout (seconds)
+  HYPRLAND_ZEN_TEST_RESET_HOST=0  Keep existing line-stdio host (default resets)
 EOF
 }
 
