@@ -9,6 +9,10 @@ import sys
 import time
 
 
+MAX_NATIVE_MESSAGE_BYTES = 2 * 1024 * 1024
+MAX_PENDING_LINES = 256
+
+
 def _socket_name() -> str:
     return "hyprland-zen-bridge.sock"
 
@@ -101,8 +105,9 @@ class NativeAdapter:
         self.sock: socket.socket | None = None
         self.last_connect_attempt = 0.0
         self.stdin_buffer = bytearray()
-        self.socket_buffer = ""
+        self.socket_buffer = bytearray()
         self.pending_lines: list[bytes] = []
+        self.pending_drop_count = 0
 
     def close_socket(self) -> None:
         if self.sock is None:
@@ -116,7 +121,7 @@ class NativeAdapter:
         except OSError:
             pass
         self.sock = None
-        self.socket_buffer = ""
+        self.socket_buffer = bytearray()
 
     def try_connect_socket(self) -> None:
         if self.sock is not None:
@@ -149,10 +154,30 @@ class NativeAdapter:
 
     def queue_line(self, line: bytes) -> None:
         self.pending_lines.append(line)
-        if len(self.pending_lines) > 256:
-            self.pending_lines = self.pending_lines[-256:]
+        if len(self.pending_lines) > MAX_PENDING_LINES:
+            drop_count = len(self.pending_lines) - MAX_PENDING_LINES
+            del self.pending_lines[:drop_count]
+            self.pending_drop_count += drop_count
+
+    def flush_pending_drop_notice(self) -> None:
+        if self.sock is None or self.pending_drop_count <= 0:
+            return
+        payload = {
+            "type": "error",
+            "op": "native-adapter-queue-overflow",
+            "message": f"native-adapter dropped {self.pending_drop_count} queued messages while socket was disconnected",
+        }
+        try:
+            self.sock.sendall(encode_json_line(payload))
+        except OSError:
+            self.close_socket()
+            return
+        self.pending_drop_count = 0
 
     def flush_pending(self) -> None:
+        if self.sock is None:
+            return
+        self.flush_pending_drop_notice()
         if self.sock is None:
             return
         while self.pending_lines:
@@ -183,6 +208,9 @@ class NativeAdapter:
         self.stdin_buffer.extend(data)
         while len(self.stdin_buffer) >= 4:
             msg_len = struct.unpack("<I", self.stdin_buffer[:4])[0]
+            if msg_len > MAX_NATIVE_MESSAGE_BYTES:
+                self.stdin_buffer.clear()
+                return False
             if len(self.stdin_buffer) < 4 + msg_len:
                 break
             payload_bytes = bytes(self.stdin_buffer[4 : 4 + msg_len])
@@ -206,15 +234,18 @@ class NativeAdapter:
         if not data:
             self.close_socket()
             return
-        self.socket_buffer += data.decode("utf-8", errors="replace")
-        while "\n" in self.socket_buffer:
-            raw_line, self.socket_buffer = self.socket_buffer.split("\n", 1)
-            raw_line = raw_line.strip()
+        self.socket_buffer.extend(data)
+        while True:
+            nl = self.socket_buffer.find(b"\n")
+            if nl < 0:
+                break
+            raw_line = bytes(self.socket_buffer[:nl]).strip()
+            del self.socket_buffer[: nl + 1]
             if not raw_line:
                 continue
             try:
-                payload = json.loads(raw_line)
-            except json.JSONDecodeError:
+                payload = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
             write_native_message(payload)
 
@@ -259,7 +290,29 @@ class LineBridgeServer:
         self.selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
         self.selector.register(self.listener, selectors.EVENT_READ, "listener")
         self.browser_conn: socket.socket | None = None
-        self.browser_buffer = ""
+        self.browser_buffer = bytearray()
+        self.bridge_connected = False
+        self.emit_bridge_state(False, "browser-bridge-not-connected")
+
+    def emit_bridge_state(self, connected: bool, reason: str) -> None:
+        self.bridge_connected = connected
+        emit_line(
+            {
+                "type": "bridge-state",
+                "connected": connected,
+                "reason": reason,
+            }
+        )
+
+    def emit_queued(self, op: str, reason: str) -> None:
+        emit_line(
+            {
+                "type": "queued",
+                "op": op,
+                "queue_length": 0,
+                "message": reason,
+            }
+        )
 
     def bind_listener(self, path: str) -> socket.socket:
         parent = os.path.dirname(path)
@@ -290,7 +343,7 @@ class LineBridgeServer:
         except OSError:
             pass
         self.browser_conn = None
-        self.browser_buffer = ""
+        self.browser_buffer = bytearray()
 
     def run(self) -> int:
         try:
@@ -312,11 +365,13 @@ class LineBridgeServer:
                             )
                             continue
                         if self.browser_conn is None:
+                            reason = f"browser-bridge-not-connected (socket={self.socket_path})"
+                            self.emit_queued(str(payload.get("op", "")), reason)
                             emit_line(
                                 {
                                     "type": "error",
                                     "op": str(payload.get("op", "")),
-                                    "message": f"browser-bridge-not-connected (socket={self.socket_path})",
+                                    "message": reason,
                                 }
                             )
                             continue
@@ -324,11 +379,14 @@ class LineBridgeServer:
                             self.browser_conn.sendall(encode_json_line(payload))
                         except OSError:
                             self.close_connection()
+                            reason = f"browser-bridge-disconnected (socket={self.socket_path})"
+                            self.emit_bridge_state(False, reason)
+                            self.emit_queued(str(payload.get("op", "")), reason)
                             emit_line(
                                 {
                                     "type": "error",
                                     "op": str(payload.get("op", "")),
-                                    "message": f"browser-bridge-disconnected (socket={self.socket_path})",
+                                    "message": reason,
                                 }
                             )
                     elif tag == "listener":
@@ -336,10 +394,11 @@ class LineBridgeServer:
                         conn.setblocking(False)
                         self.close_connection()
                         self.browser_conn = conn
-                        self.browser_buffer = ""
+                        self.browser_buffer = bytearray()
                         self.selector.register(
                             self.browser_conn, selectors.EVENT_READ, "browser"
                         )
+                        self.emit_bridge_state(True, "browser-bridge-connected")
                     elif tag == "browser":
                         assert self.browser_conn is not None
                         try:
@@ -348,18 +407,20 @@ class LineBridgeServer:
                             data = b""
                         if not data:
                             self.close_connection()
+                            self.emit_bridge_state(False, "browser-bridge-disconnected")
                             continue
-                        self.browser_buffer += data.decode("utf-8", errors="replace")
-                        while "\n" in self.browser_buffer:
-                            raw_line, self.browser_buffer = self.browser_buffer.split(
-                                "\n", 1
-                            )
-                            raw_line = raw_line.strip()
+                        self.browser_buffer.extend(data)
+                        while True:
+                            nl = self.browser_buffer.find(b"\n")
+                            if nl < 0:
+                                break
+                            raw_line = bytes(self.browser_buffer[:nl]).strip()
+                            del self.browser_buffer[: nl + 1]
                             if not raw_line:
                                 continue
                             try:
-                                payload = json.loads(raw_line)
-                            except json.JSONDecodeError as err:
+                                payload = json.loads(raw_line.decode("utf-8"))
+                            except (UnicodeDecodeError, json.JSONDecodeError) as err:
                                 emit_line(
                                     {
                                         "type": "error",

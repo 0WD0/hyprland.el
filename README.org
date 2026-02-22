@@ -254,6 +254,32 @@ If this still persists, check native host socket path details from
 ~M-x hyprland-zen-trace-report~ (error messages include ~socket=...~) to detect
 runtime-dir path mismatch.
 
+** Zen bridge data flow (Emacs / native-host / extension)
+
+Current runtime has 3 participants:
+
+1. Emacs (~hyprland-zen.el~) starts ~hyprland-zen-native-host --line-stdio~
+2. Line-stdio host process relays JSON lines over Unix socket
+3. Browser extension talks to same executable via Native Messaging stdio
+
+Main request path:
+
+- Emacs sends op (~list-tabs~, ~activate-tab~, ~activate-workspace~, etc.)
+- line-stdio host forwards to browser-side native adapter through socket
+- extension handles op and sends ~snapshot/upsert/workspace_* / preview / error~ back
+- Emacs consumes inbound events and updates local tab/workspace stores
+
+Disconnect semantics:
+
+- line-stdio host now emits ~bridge-state~ and ~queued~ messages when browser
+  side is disconnected/reconnecting, and emits explicit errors for immediate
+  failed operations
+
+Workspace mapping note:
+
+- Regular WebExtensions cannot directly read Zen internal workspace UUID state;
+  bridge workspace identity remains based on ~windowId + cookieStoreId~.
+
 ** Preview works once, then bridge disconnects
 
 This often means preview payload exceeded native-messaging safe size and the

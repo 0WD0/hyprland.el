@@ -214,11 +214,15 @@ async function shrinkPreviewDataUrl(dataUrl) {
 }
 
 async function activateWorkspaceByKey(key) {
+  const rawKey = String(key || "");
+  const normalizedKey = rawKey.split("/").length >= 3
+    ? rawKey.split("/").slice(2).join("/")
+    : rawKey;
   const tabs = await browser.tabs.query({});
-  const target = tabs.find((tab) => workspaceKey(tab) === key && !tab.discarded) ||
-    tabs.find((tab) => workspaceKey(tab) === key);
+  const target = tabs.find((tab) => workspaceKey(tab) === normalizedKey && !tab.discarded) ||
+    tabs.find((tab) => workspaceKey(tab) === normalizedKey);
   if (!target) {
-    throw new Error(`Workspace not found: ${key}`);
+    throw new Error(`Workspace not found: ${rawKey}`);
   }
   await browser.windows.update(target.windowId, { focused: true });
   await browser.tabs.update(target.id, { active: true });

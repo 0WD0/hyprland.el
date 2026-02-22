@@ -751,7 +751,11 @@ Active tabs are sorted first, then by title."
   (setq hyprland-zen--last-sentinel-event (string-trim event))
   (unless (process-live-p proc)
     (setq hyprland-zen--process nil
-          hyprland-zen--fragment "")))
+          hyprland-zen--fragment ""
+          hyprland-zen--bridge-connected nil
+          hyprland-zen--bridge-last-reason "host-process-exited"
+          hyprland-zen--queued-op-count 0
+          hyprland-zen--last-queued-op nil)))
 
 (defun hyprland-zen-running-p ()
   "Return non-nil when Zen host process is running."

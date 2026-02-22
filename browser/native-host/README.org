@@ -10,6 +10,12 @@
 The browser-side default mode and Emacs-side ~--line-stdio~ mode communicate
 through one unix socket.
 
+~--line-stdio~ mode emits additional runtime diagnostics for Emacs:
+
+- ~bridge-state~: browser bridge connected/disconnected transitions
+- ~queued~: operation reached line-stdio host while browser side unavailable
+- ~error~: immediate forwarding/decoding failures
+
 Both scripts use this socket path:
 
 - ~HYPRLAND_ZEN_SOCKET~ env var when set

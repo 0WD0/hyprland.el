@@ -10,6 +10,15 @@ Current workspace support is Firefox-compatible and derived from:
 - browser window id
 - cookieStoreId (container)
 
+Why not native Zen workspace UUID?
+
+- Zen tracks internal workspace on browser chrome tab attributes (for example
+  ~zen-workspace-id~), but regular WebExtensions operate on the public
+  ~tabs.Tab~ object surface.
+- On current Zen/Firefox extension APIs, the stable fields available to this
+  bridge are still window/container identifiers, so workspace mapping uses
+  ~windowId + cookieStoreId~.
+
 So it works on plain Firefox and Zen, while leaving room for future Zen-only
 workspace APIs.
 
@@ -80,6 +89,12 @@ Connection behavior:
 
 - extension auto-retries native host connection
 - on successful connect, extension immediately pushes ~snapshot~ and ~workspace_snapshot~
+
+Bridge-state note:
+
+- The extension does not emit dedicated ~bridge-state~ payloads itself.
+- In Emacs line-bridge mode, native host emits ~bridge-state~ / ~queued~ events
+  so ~hyprland-zen.el~ can show reconnect/queued diagnostics.
 
 * Zen sync-window note
 
