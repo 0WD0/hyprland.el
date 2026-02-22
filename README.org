@@ -18,6 +18,11 @@ Current version: ~0.1.0~ (early but usable).
 - Hyprland session (with ~HYPRLAND_INSTANCE_SIGNATURE~ in Emacs env)
 - ~hyprctl~ in PATH
 - ~grim~ in PATH (preview capture uses ~grim -T~)
+
+Preview identifier note:
+
+- ~grim -T~ uses Hyprland foreign-toplevel identifier (stable id, hex string).
+- ~hyprland.el~ requires ~hyprctl -j clients~ to expose ~stableId~.
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
 - Optional: ~hyprland-zen-native-host~ executable (for ~hyprland-zen-*~ commands)
 - Optional: Zen/Firefox WebExtension under ~browser/zen-extension/~

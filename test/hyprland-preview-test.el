@@ -7,11 +7,15 @@
 (require 'ert)
 (require 'hyprland-preview)
 
-(ert-deftest hyprland-preview-test-address-identifier/strip-0x-and-pad ()
-  (should (equal (hyprland-preview--address->identifier "0xABC123") "0000000000abc123")))
+(ert-deftest hyprland-preview-test-normalize-identifier/strip-0x ()
+  (should (equal (hyprland-preview--normalize-identifier "0xABC123") "abc123")))
 
-(ert-deftest hyprland-preview-test-address-identifier/reject-invalid ()
-  (should-not (hyprland-preview--address->identifier "xyz-1")))
+(ert-deftest hyprland-preview-test-normalize-identifier/reject-invalid ()
+  (should-not (hyprland-preview--normalize-identifier "xyz-1")))
+
+(ert-deftest hyprland-preview-test-window-identifier/prefers-stable-id ()
+  (let ((window '((stableId . "1800000a") (address . "0xabc"))))
+    (should (equal (hyprland-preview--window-identifier window) "1800000a"))))
 
 (ert-deftest hyprland-preview-test-focus-default-disabled ()
   (should-not (default-value 'hyprland-preview-focus-for-accurate-capture)))
@@ -44,17 +48,17 @@
       (should (= hyprland-preview--cache-bytes 0)))))
 
 (ert-deftest hyprland-preview-test-capture-args/grim-target ()
-  (let ((window '((address . "0xabc"))))
+  (let ((window '((stableId . "1800000a") (address . "0xabc"))))
     (should (equal (hyprland-preview--capture-args window)
-                   '("-T" "0000000000000abc" "-")))))
+                   '("-T" "1800000a" "-")))))
 
 (ert-deftest hyprland-preview-test-capture-args/grim-target-with-cursor ()
-  (let ((window '((address . "0xabc")))
+  (let ((window '((stableId . "1800000a") (address . "0xabc")))
         (hyprland-preview-overlay-cursor t))
     (should (equal (hyprland-preview--capture-args window)
-                   '("-c" "-T" "0000000000000abc" "-")))))
+                   '("-c" "-T" "1800000a" "-")))))
 
-(ert-deftest hyprland-preview-test-capture-args/error-without-address ()
+(ert-deftest hyprland-preview-test-capture-args/error-without-stable-id ()
   (let ((window '((title . "x"))))
     (should-error (hyprland-preview--capture-args window))))
 
@@ -80,14 +84,14 @@
       (should-not hyprland-preview--active-restore-address))))
 
 (ert-deftest hyprland-preview-test-grim-command/grim-only ()
-  (let ((window '((address . "0xabc"))))
+  (let ((window '((stableId . "1800000a") (address . "0xabc"))))
     (let ((command (hyprland-preview--grim-command window)))
       (should (equal (plist-get command :program) hyprland-grim-executable))
       (should (equal (plist-get command :args)
-                     '("-T" "0000000000000abc" "-"))))))
+                     '("-T" "1800000a" "-"))))))
 
 (ert-deftest hyprland-preview-test-request/startup-error-returns-failure-payload ()
-  (let ((window '((address . "0xabc") (at . (1 2)) (size . (3 4))))
+  (let ((window '((stableId . "1800000a") (address . "0xabc") (at . (1 2)) (size . (3 4))))
         payload)
     (cl-letf (((symbol-function 'hyprland-preview--sensitive-p)
                (lambda (_window) nil))
@@ -98,8 +102,8 @@
               ((symbol-function 'hyprland-preview--cancel-active-process)
                #'ignore)
               ((symbol-function 'hyprland-preview--grim-command)
-               (lambda (_window)
-                 '(:program "grim" :args ("-T" "0000000000000abc" "-"))))
+                (lambda (_window)
+                 '(:program "grim" :args ("-T" "1800000a" "-"))))
               ((symbol-function 'make-process)
                 (lambda (&rest _args)
                   (error "exec format error"))))
