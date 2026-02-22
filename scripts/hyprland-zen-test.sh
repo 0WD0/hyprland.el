@@ -14,17 +14,17 @@ MODE="${1:-all}"
 
 run_unit() {
 	echo "[hyprland-zen-test] running unit tests (test/hyprland-zen-test.el)"
-	eask test ert test/hyprland-zen-test.el
+	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l test/hyprland-zen-test.el -f ert-run-tests-batch-and-exit
 }
 
 run_doctor() {
 	echo "[hyprland-zen-test] running runtime doctor (non-interactive)"
-	eask emacs --batch -Q -l hyprland.el -l scripts/hyprland-zen-check.el
+	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l hyprland.el -l scripts/hyprland-zen-check.el
 }
 
 run_live() {
 	echo "[hyprland-zen-test] running live smoke test (requires Zen extension + native host)"
-	eask emacs --batch -Q -l hyprland.el -l scripts/hyprland-zen-live-runner.el
+	eask emacs --batch -Q --eval "(setq load-prefer-newer t)" -L . -l hyprland.el -l scripts/hyprland-zen-live-runner.el
 }
 
 run_all() {

@@ -83,6 +83,27 @@ diagnosis in real environments."
   :type 'number
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-native-host-auto-restart t
+  "When non-nil, auto-restart stale native adapter on repeated bridge disconnects."
+  :type 'boolean
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-native-host-restart-threshold 8
+  "Consecutive bridge-not-connected errors before restarting native adapter."
+  :type 'integer
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-native-host-restart-cooldown 20.0
+  "Minimum seconds between automatic native adapter restart attempts."
+  :type 'number
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-native-host-pkill-pattern
+  "hyprland-zen-native-host .*hyprland-zen-bridge@0wd0"
+  "Pattern passed to `pkill -f' for stale browser-launched native adapters."
+  :type 'string
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -105,6 +126,8 @@ diagnosis in real environments."
 
 (defvar hyprland-zen--last-error-notify-signature nil)
 (defvar hyprland-zen--last-error-notify-at nil)
+(defvar hyprland-zen--bridge-not-connected-streak 0)
+(defvar hyprland-zen--last-native-host-restart-at nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -316,6 +339,27 @@ ACTION and CAND follow Consult's :state contract."
   (setq hyprland-zen--last-error-message (hyprland-zen--string message)
         hyprland-zen--last-error-op (hyprland-zen--string op)))
 
+(defun hyprland-zen--maybe-restart-native-host (reason)
+  "Restart stale native adapter process when REASON repeats too often."
+  (when (and hyprland-zen-native-host-auto-restart
+             (>= hyprland-zen--bridge-not-connected-streak
+                 (max 1 hyprland-zen-native-host-restart-threshold))
+             (executable-find "pkill")
+             (> (length (string-trim hyprland-zen-native-host-pkill-pattern)) 0)
+             (let ((last (or hyprland-zen--last-native-host-restart-at 0.0)))
+               (>= (- (hyprland-zen--now) last)
+                   (max 0.0 hyprland-zen-native-host-restart-cooldown))))
+    (let ((exit-code (call-process "pkill" nil nil nil "-f" hyprland-zen-native-host-pkill-pattern)))
+      (setq hyprland-zen--last-native-host-restart-at (hyprland-zen--now)
+            hyprland-zen--bridge-not-connected-streak 0)
+      (hyprland-zen--trace-add
+       'native-restart
+       `((reason . ,reason)
+         (pkill-pattern . ,hyprland-zen-native-host-pkill-pattern)
+         (exit-code . ,(or exit-code -1))))
+      (hyprland--debug "zen native adapter restart requested (%s), pkill exit=%s"
+                       reason (or exit-code -1)))))
+
 (defun hyprland-zen--reset-runtime-metrics ()
   "Reset runtime counters and timestamps for diagnostics."
   (setq hyprland-zen--started-at nil
@@ -329,6 +373,8 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-error-op nil
         hyprland-zen--last-error-notify-signature nil
         hyprland-zen--last-error-notify-at nil
+        hyprland-zen--bridge-not-connected-streak 0
+        hyprland-zen--last-native-host-restart-at nil
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0)
@@ -662,6 +708,8 @@ Active tabs are sorted first, then by title."
   (let ((type (hyprland-zen--message-type message)))
     (hyprland-zen--touch-line type)
     (hyprland-zen--trace-add 'in message)
+    (unless (string= type "error")
+      (setq hyprland-zen--bridge-not-connected-streak 0))
     (pcase type
       ("snapshot"
        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
@@ -720,11 +768,18 @@ Active tabs are sorted first, then by title."
        (hyprland-zen--record-error
         (hyprland-zen--field message 'message)
         (hyprland-zen--field message 'op))
-       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
+       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message)))
+                   (op-name (hyprland-zen--string (hyprland-zen--field message 'op))))
          (when (or (string-match-p "browser-bridge-not-connected" reason)
                    (string-match-p "browser-bridge-disconnected" reason))
+           (if (member op-name '("open-url" "capture-tab" "activate-tab" "activate-workspace"))
+               (setq hyprland-zen--bridge-not-connected-streak
+                     (max hyprland-zen--bridge-not-connected-streak
+                          (max 1 hyprland-zen-native-host-restart-threshold)))
+             (cl-incf hyprland-zen--bridge-not-connected-streak))
            (unless (hyprland-zen--bootstrap-active-p)
-             (hyprland-zen--start-bootstrap-retry))))
+             (hyprland-zen--start-bootstrap-retry))
+           (hyprland-zen--maybe-restart-native-host reason)))
        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
          (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
