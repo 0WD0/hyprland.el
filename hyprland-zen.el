@@ -84,6 +84,14 @@ Examples:
   :type 'number
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-post-activate-jump-delay 0.22
+  "Seconds to wait after `activate-tab` before explicit Hyprland jump.
+
+In multi-window setups, browser focus/title updates may lag command dispatch by
+a short moment. Delaying the explicit jump improves window resolution accuracy."
+  :type 'number
+  :group 'hyprland-zen)
+
 (defcustom hyprland-zen-trace-max-entries 240
   "Maximum number of in-memory bridge trace entries to retain.
 
@@ -303,6 +311,25 @@ When ADDRESS is nil, use current active Hyprland window address."
 Return non-nil when jump was dispatched."
   (or (hyprland-zen--jump-to-window-by-title tab-title window-id)
       (hyprland-zen--jump-to-cached-window window-id)))
+
+(defun hyprland-zen--post-activate-window-sync (window-id tab-title)
+  "After activate-tab, refresh mapping and perform explicit jump for WINDOW-ID."
+  (when (and hyprland-zen-jump-to-window-on-tab-switch
+             (stringp window-id)
+             (not (string-empty-p window-id)))
+    (hyprland-zen--jump-to-known-window window-id tab-title)
+    (hyprland-zen--schedule-window-address-refresh window-id)))
+
+(defun hyprland-zen--schedule-post-activate-window-sync (window-id tab-title)
+  "Schedule delayed post-activate sync for WINDOW-ID and TAB-TITLE."
+  (when (and hyprland-zen-jump-to-window-on-tab-switch
+             (stringp window-id)
+             (not (string-empty-p window-id)))
+    (run-at-time (max 0.0 hyprland-zen-post-activate-jump-delay)
+                 nil
+                 #'hyprland-zen--post-activate-window-sync
+                 window-id
+                 tab-title)))
 
 (defun hyprland-zen--decode-image-data-url (data-url)
   "Decode DATA-URL image string into plist `(:bytes :type)'."
@@ -1238,11 +1265,9 @@ When TAB is nil, prompt from current registry."
       (unless (or hyprland-zen--bridge-connected
                   (hyprland-zen--wait-for-bridge 1.5))
         (user-error "Zen bridge is reconnecting; activate-tab aborted")))
-    (when window-id
-      (hyprland-zen--jump-to-known-window window-id tab-title))
     (hyprland-zen--send-with-queued-retry payload hyprland-zen-op-retry-timeout)
     (when window-id
-      (hyprland-zen--schedule-window-address-refresh window-id))
+      (hyprland-zen--schedule-post-activate-window-sync window-id tab-title))
     key))
 
 (defun hyprland-zen-tab-close (&optional tab)
