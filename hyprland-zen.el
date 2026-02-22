@@ -60,6 +60,16 @@ Examples:
   :type 'number
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-bootstrap-retry-seconds 8
+  "Seconds to keep retrying initial tab/workspace refresh after bridge start."
+  :type 'number
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-bootstrap-retry-interval 1.0
+  "Seconds between bootstrap refresh retries while bridge is warming up."
+  :type 'number
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -74,6 +84,8 @@ Examples:
 (defvar hyprland-zen--preview-tab-id nil)
 (defvar hyprland-zen--preview-candidates nil)
 (defvar hyprland-zen--retry-refresh-timer nil)
+(defvar hyprland-zen--bootstrap-timer nil)
+(defvar hyprland-zen--bootstrap-deadline nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -299,6 +311,45 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0))
+
+(defun hyprland-zen--cancel-bootstrap-retry ()
+  "Cancel ongoing bootstrap retry timer state."
+  (when (timerp hyprland-zen--bootstrap-timer)
+    (cancel-timer hyprland-zen--bootstrap-timer))
+  (setq hyprland-zen--bootstrap-timer nil
+        hyprland-zen--bootstrap-deadline nil))
+
+(defun hyprland-zen--bootstrap-ready-p ()
+  "Return non-nil when both tab and workspace stores are populated."
+  (and (hyprland-zen-tabs)
+       (hyprland-zen-workspaces)))
+
+(defun hyprland-zen--bootstrap-retry-tick ()
+  "Retry tab/workspace refresh during startup warmup window."
+  (setq hyprland-zen--bootstrap-timer nil)
+  (unless (hyprland-zen-running-p)
+    (hyprland-zen--cancel-bootstrap-retry))
+  (when (and (hyprland-zen-running-p)
+             hyprland-zen--bootstrap-deadline
+             (< (hyprland-zen--now) hyprland-zen--bootstrap-deadline)
+             (not (hyprland-zen--bootstrap-ready-p)))
+    (ignore-errors
+      (hyprland-zen-refresh)
+      (hyprland-zen-refresh-workspaces))
+    (setq hyprland-zen--bootstrap-timer
+          (run-at-time
+           (max 0.2 hyprland-zen-bootstrap-retry-interval)
+           nil
+           #'hyprland-zen--bootstrap-retry-tick)))
+  (when (hyprland-zen--bootstrap-ready-p)
+    (hyprland-zen--cancel-bootstrap-retry)))
+
+(defun hyprland-zen--start-bootstrap-retry ()
+  "Start bounded startup retries for initial bridge synchronization."
+  (hyprland-zen--cancel-bootstrap-retry)
+  (setq hyprland-zen--bootstrap-deadline
+        (+ (hyprland-zen--now) (max 0.0 hyprland-zen-bootstrap-retry-seconds)))
+  (hyprland-zen--bootstrap-retry-tick))
 
 (defun hyprland-zen--schedule-retry-refresh ()
   "Schedule a short delayed refresh after bridge-not-connected errors."
@@ -561,21 +612,25 @@ Active tabs are sorted first, then by title."
     (hyprland-zen--touch-line type)
     (pcase type
       ("snapshot"
-       (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
-       (hyprland-zen--clear-store)
+        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
+        (hyprland-zen--clear-store)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
-       (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
-         (hyprland-zen--store-tab tab))
-       (run-hooks 'hyprland-zen-after-refresh-hook)
-       t)
+        (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
+          (hyprland-zen--store-tab tab))
+        (when (hyprland-zen--bootstrap-ready-p)
+          (hyprland-zen--cancel-bootstrap-retry))
+        (run-hooks 'hyprland-zen-after-refresh-hook)
+        t)
       ((or "workspace-snapshot" "workspace_snapshot")
-       (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
-       (clrhash hyprland-zen--workspaces)
-       (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
-         (hyprland-zen--store-workspace workspace))
-       (run-hooks 'hyprland-zen-after-refresh-hook)
-       t)
+        (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
+        (clrhash hyprland-zen--workspaces)
+        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+          (hyprland-zen--store-workspace workspace))
+        (when (hyprland-zen--bootstrap-ready-p)
+          (hyprland-zen--cancel-bootstrap-retry))
+        (run-hooks 'hyprland-zen-after-refresh-hook)
+        t)
       ("upsert"
        (when-let* ((tab (or (hyprland-zen--field message 'tab)
                             message))
@@ -613,12 +668,17 @@ Active tabs are sorted first, then by title."
        (hyprland-zen--record-error
         (hyprland-zen--field message 'message)
         (hyprland-zen--field message 'op))
-       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
-         (when (or (string-match-p "browser-bridge-not-connected" reason)
-                   (string-match-p "browser-bridge-disconnected" reason))
-           (hyprland-zen--schedule-retry-refresh)))
-       (when (and hyprland-zen--preview-tab-id
-                  (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
+        (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
+          (when (or (string-match-p "browser-bridge-not-connected" reason)
+                    (string-match-p "browser-bridge-disconnected" reason))
+            (hyprland-zen--schedule-retry-refresh)
+            (hyprland-zen--start-bootstrap-retry)))
+        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
+                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
+          (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
+            (message "hyprland-zen error (%s): %s" op err-message)))
+        (when (and hyprland-zen--preview-tab-id
+                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
           (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
        (hyprland--debug "zen host error: %s"
@@ -708,6 +768,7 @@ Active tabs are sorted first, then by title."
       (when hyprland-zen-auto-refresh-on-start
         (hyprland-zen-refresh)
         (hyprland-zen-refresh-workspaces))
+      (hyprland-zen--start-bootstrap-retry)
       hyprland-zen--process)))
 
 (defun hyprland-zen-stop ()
@@ -717,6 +778,7 @@ Active tabs are sorted first, then by title."
     (delete-process hyprland-zen--process))
   (when (timerp hyprland-zen--retry-refresh-timer)
     (cancel-timer hyprland-zen--retry-refresh-timer))
+  (hyprland-zen--cancel-bootstrap-retry)
   (setq hyprland-zen--preview-tab-id nil)
   (setq hyprland-zen--preview-candidates nil)
   (hyprland-consult--cleanup-preview)
@@ -749,6 +811,9 @@ When called interactively, print a short status line in echo area."
                 (hyprland-zen--seconds-since hyprland-zen--last-preview-request-at)
                 :last-preview-response-seconds-ago
                 (hyprland-zen--seconds-since hyprland-zen--last-preview-response-at)
+                :bootstrap-retry-seconds-left
+                (when hyprland-zen--bootstrap-deadline
+                  (max 0.0 (- hyprland-zen--bootstrap-deadline (hyprland-zen--now))))
                 :last-error-op hyprland-zen--last-error-op
                 :last-error-message hyprland-zen--last-error-message
                 :last-sentinel-event hyprland-zen--last-sentinel-event)))

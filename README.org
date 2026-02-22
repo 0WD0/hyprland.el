@@ -206,6 +206,8 @@ Important options:
 - ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
 - ~hyprland-zen-host-command~: command list used to launch Zen bridge process
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
+- ~hyprland-zen-bootstrap-retry-seconds~: startup warmup window for auto-retrying tab/workspace refresh
+- ~hyprland-zen-bootstrap-retry-interval~: retry interval during startup warmup
 - ~hyprland-zen-preview-key~: Consult preview trigger for tab switch
 - ~hyprland-zen-jump-to-window-on-tab-switch~: best-effort Hyprland jump on tab activate
 
@@ -227,6 +229,15 @@ This often happens with daemon/service launches.
 
 Use latest ~hyprland-reconcile.el~ from this repo. That compatibility issue
 is fixed in current code.
+
+** Zen bridge only works right after extension reload
+
+If tabs appear only immediately after reloading the extension, the bridge likely
+hit startup timing drift. Current ~hyprland-zen~ retries ~list-tabs~ / ~list-workspaces~
+for a bounded warmup window. You can inspect progress with:
+
+- ~M-x hyprland-zen-status~ (check ~:bootstrap-retry-seconds-left~, ~:last-error-message~)
+- ~M-x hyprland-zen-doctor~ (one-shot readiness probe)
 
 ** Consult state arity error
 
