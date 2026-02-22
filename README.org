@@ -157,6 +157,8 @@ Use tab commands:
 - ~M-x hyprland-zen-open-url~ (open URL in Zen)
 - ~M-x hyprland-zen-status~ (show bridge runtime counters/timestamps and last error)
 - ~M-x hyprland-zen-doctor~ (force refresh + wait window, report tabs/workspaces readiness)
+- ~M-x hyprland-zen-trace-report~ (dump recent inbound/outbound bridge payloads)
+- ~M-x hyprland-zen-trace-reset~ (clear runtime bridge trace ring)
 
 Tab switch now supports preview during candidate navigation:
 
@@ -208,6 +210,7 @@ Important options:
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
 - ~hyprland-zen-bootstrap-retry-seconds~: startup warmup window for auto-retrying tab/workspace refresh
 - ~hyprland-zen-bootstrap-retry-interval~: retry interval during startup warmup
+- ~hyprland-zen-trace-max-entries~: max in-memory bridge trace payload entries
 - ~hyprland-zen-preview-key~: Consult preview trigger for tab switch
 - ~hyprland-zen-jump-to-window-on-tab-switch~: best-effort Hyprland jump on tab activate
 
@@ -238,6 +241,20 @@ for a bounded warmup window. You can inspect progress with:
 
 - ~M-x hyprland-zen-status~ (check ~:bootstrap-retry-seconds-left~, ~:last-error-message~)
 - ~M-x hyprland-zen-doctor~ (one-shot readiness probe)
+
+** Need real runtime data for debugging Zen issues
+
+Collect bridge traffic from your real session (recommended before reporting bugs):
+
+1. ~M-x hyprland-zen-trace-reset~
+2. Reproduce preview/switch failure once
+3. ~M-x hyprland-zen-trace-report~ and copy buffer contents
+
+You can also run the live smoke script in your real environment:
+
+#+begin_src bash
+emacs -Q --batch -L . -l hyprland.el -l scripts/hyprland-zen-live-smoke-test.el
+#+end_src
 
 ** Consult state arity error
 

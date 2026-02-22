@@ -70,6 +70,14 @@ Examples:
   :type 'number
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-trace-max-entries 240
+  "Maximum number of in-memory bridge trace entries to retain.
+
+Each trace entry records inbound/outbound protocol payloads for runtime
+diagnosis in real environments."
+  :type 'integer
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -86,6 +94,9 @@ Examples:
 (defvar hyprland-zen--retry-refresh-timer nil)
 (defvar hyprland-zen--bootstrap-timer nil)
 (defvar hyprland-zen--bootstrap-deadline nil)
+
+(defvar hyprland-zen--trace nil
+  "Recent bridge protocol entries (newest first).")
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -310,7 +321,18 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-error-op nil
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--messages-in 0
-        hyprland-zen--messages-out 0))
+        hyprland-zen--messages-out 0)
+  (setq hyprland-zen--trace nil))
+
+(defun hyprland-zen--trace-add (dir payload)
+  "Record one bridge trace entry for DIR and PAYLOAD."
+  (when (> hyprland-zen-trace-max-entries 0)
+    (push (list :ts (hyprland-zen--now)
+                :dir dir
+                :payload payload)
+          hyprland-zen--trace)
+    (when (> (length hyprland-zen--trace) hyprland-zen-trace-max-entries)
+      (setcdr (nthcdr (1- hyprland-zen-trace-max-entries) hyprland-zen--trace) nil))))
 
 (defun hyprland-zen--cancel-bootstrap-retry ()
   "Cancel ongoing bootstrap retry timer state."
@@ -610,27 +632,28 @@ Active tabs are sorted first, then by title."
   "Apply parsed host MESSAGE to in-memory state."
   (let ((type (hyprland-zen--message-type message)))
     (hyprland-zen--touch-line type)
+    (hyprland-zen--trace-add 'in message)
     (pcase type
       ("snapshot"
-        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
-        (hyprland-zen--clear-store)
+       (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
+       (hyprland-zen--clear-store)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
-        (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
-          (hyprland-zen--store-tab tab))
-        (when (hyprland-zen--bootstrap-ready-p)
-          (hyprland-zen--cancel-bootstrap-retry))
-        (run-hooks 'hyprland-zen-after-refresh-hook)
-        t)
+       (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
+         (hyprland-zen--store-tab tab))
+       (when (hyprland-zen--bootstrap-ready-p)
+         (hyprland-zen--cancel-bootstrap-retry))
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t)
       ((or "workspace-snapshot" "workspace_snapshot")
-        (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
-        (clrhash hyprland-zen--workspaces)
-        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
-          (hyprland-zen--store-workspace workspace))
-        (when (hyprland-zen--bootstrap-ready-p)
-          (hyprland-zen--cancel-bootstrap-retry))
-        (run-hooks 'hyprland-zen-after-refresh-hook)
-        t)
+       (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
+       (clrhash hyprland-zen--workspaces)
+       (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+         (hyprland-zen--store-workspace workspace))
+       (when (hyprland-zen--bootstrap-ready-p)
+         (hyprland-zen--cancel-bootstrap-retry))
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t)
       ("upsert"
        (when-let* ((tab (or (hyprland-zen--field message 'tab)
                             message))
@@ -668,17 +691,17 @@ Active tabs are sorted first, then by title."
        (hyprland-zen--record-error
         (hyprland-zen--field message 'message)
         (hyprland-zen--field message 'op))
-        (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
-          (when (or (string-match-p "browser-bridge-not-connected" reason)
-                    (string-match-p "browser-bridge-disconnected" reason))
-            (hyprland-zen--schedule-retry-refresh)
-            (hyprland-zen--start-bootstrap-retry)))
-        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
-                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
-          (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
-            (message "hyprland-zen error (%s): %s" op err-message)))
-        (when (and hyprland-zen--preview-tab-id
-                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
+       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
+         (when (or (string-match-p "browser-bridge-not-connected" reason)
+                   (string-match-p "browser-bridge-disconnected" reason))
+           (hyprland-zen--schedule-retry-refresh)
+           (hyprland-zen--start-bootstrap-retry)))
+       (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
+                   (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
+         (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
+           (message "hyprland-zen error (%s): %s" op err-message)))
+       (when (and hyprland-zen--preview-tab-id
+                  (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
           (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
        (hyprland--debug "zen host error: %s"
@@ -697,6 +720,7 @@ Active tabs are sorted first, then by title."
             (json-null nil))
         (json-read-from-string line))
     (error
+     (hyprland-zen--trace-add 'parse-error line)
      (hyprland--debug "zen invalid json line: %s (%s)" line (error-message-string err))
      nil)))
 
@@ -721,6 +745,7 @@ Active tabs are sorted first, then by title."
 (defun hyprland-zen--process-sentinel (proc event)
   "Handle Zen host PROC lifecycle EVENT."
   (hyprland--debug "zen host sentinel: %s" (string-trim event))
+  (hyprland-zen--trace-add 'sentinel (string-trim event))
   (setq hyprland-zen--last-sentinel-event (string-trim event))
   (unless (process-live-p proc)
     (setq hyprland-zen--process nil
@@ -734,6 +759,7 @@ Active tabs are sorted first, then by title."
   "Send JSON PAYLOAD to running host process."
   (unless (hyprland-zen-running-p)
     (user-error "hyprland-zen host is not running"))
+  (hyprland-zen--trace-add 'out payload)
   (cl-incf hyprland-zen--messages-out)
   (when (equal (hyprland-zen--field payload 'op) "capture-tab")
     (setq hyprland-zen--last-preview-request-at (hyprland-zen--now)))
@@ -801,6 +827,7 @@ When called interactively, print a short status line in echo area."
                 :workspace-count workspace-count
                 :messages-in hyprland-zen--messages-in
                 :messages-out hyprland-zen--messages-out
+                :trace-count (length hyprland-zen--trace)
                 :started-seconds-ago (hyprland-zen--seconds-since hyprland-zen--started-at)
                 :last-message-type hyprland-zen--last-line-type
                 :last-message-seconds-ago (hyprland-zen--seconds-since hyprland-zen--last-line-at)
@@ -819,16 +846,59 @@ When called interactively, print a short status line in echo area."
                 :last-sentinel-event hyprland-zen--last-sentinel-event)))
     (when (called-interactively-p 'interactive)
       (message
-       "Zen bridge: running=%s tabs=%d workspaces=%d in/out=%d/%d last=%s %.1fs ago err=%s"
+       "Zen bridge: running=%s tabs=%d workspaces=%d in/out=%d/%d trace=%d last=%s %.1fs ago err=%s"
        (if running "yes" "no")
        tab-count
        workspace-count
        hyprland-zen--messages-in
        hyprland-zen--messages-out
+       (length hyprland-zen--trace)
        (or hyprland-zen--last-line-type "none")
        (or (hyprland-zen--seconds-since hyprland-zen--last-line-at) -1.0)
        (or hyprland-zen--last-error-message "none")))
     report))
+
+(defun hyprland-zen-trace-reset ()
+  "Clear runtime bridge trace entries."
+  (interactive)
+  (setq hyprland-zen--trace nil)
+  (when (called-interactively-p 'interactive)
+    (message "hyprland-zen trace cleared")))
+
+(defun hyprland-zen-trace-report (&optional limit)
+  "Render recent bridge trace entries into a report buffer.
+
+LIMIT controls maximum entries (default 80)."
+  (interactive "P")
+  (let* ((n (max 1 (truncate (or (and (numberp limit) limit)
+                                 (and (listp limit) (prefix-numeric-value limit))
+                                 80))))
+         (entries (cl-subseq hyprland-zen--trace 0 (min n (length hyprland-zen--trace))))
+         (buf (get-buffer-create "*hyprland-zen-trace*"))
+         (status (hyprland-zen-status)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "hyprland-zen trace report\n\nrunning=%s tabs=%s workspaces=%s in/out=%s/%s trace=%s\nlast-error-op=%s\nlast-error-message=%s\n\n"
+                        (plist-get status :running)
+                        (plist-get status :tab-count)
+                        (plist-get status :workspace-count)
+                        (plist-get status :messages-in)
+                        (plist-get status :messages-out)
+                        (plist-get status :trace-count)
+                        (or (plist-get status :last-error-op) "")
+                        (or (plist-get status :last-error-message) "")))
+        (dolist (entry entries)
+          (insert
+           (format "[%s] %s %S\n"
+                   (format-time-string "%F %T" (seconds-to-time (or (plist-get entry :ts) 0.0)))
+                   (plist-get entry :dir)
+                   (plist-get entry :payload))))
+        (goto-char (point-min))
+        (special-mode)))
+    (when (called-interactively-p 'interactive)
+      (pop-to-buffer buf))
+    buf))
 
 (defun hyprland-zen-doctor (&optional timeout)
   "Run lightweight Zen bridge diagnosis and return report plist.
