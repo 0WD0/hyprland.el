@@ -31,6 +31,31 @@
         (accept-process-output hyprland-zen--process 0.2)))
     out))
 
+(defun hyprland-zen-live-smoke--capturable-url-p (url)
+  "Return non-nil when URL is likely capturable for screenshot preview checks."
+  (and (stringp url)
+       (or (string-prefix-p "http://" url)
+           (string-prefix-p "https://" url)
+           (string-prefix-p "file://" url))))
+
+(defun hyprland-zen-live-smoke--pick-tab (tabs)
+  "Pick best smoke-test TAB from TABS list.
+
+Prefer active + capturable URL, then any capturable, then active, then first." 
+  (or (cl-find-if (lambda (it)
+                    (and (hyprland-zen--truthy-p (hyprland-zen--field it 'active))
+                         (hyprland-zen-live-smoke--capturable-url-p
+                          (hyprland-zen--string (hyprland-zen--field it 'url)))))
+                  tabs)
+      (cl-find-if (lambda (it)
+                    (hyprland-zen-live-smoke--capturable-url-p
+                     (hyprland-zen--string (hyprland-zen--field it 'url))))
+                  tabs)
+      (cl-find-if (lambda (it)
+                    (hyprland-zen--truthy-p (hyprland-zen--field it 'active)))
+                  tabs)
+      (car tabs)))
+
 (defun hyprland-zen-live-smoke-run ()
   "Run live smoke test for Zen tab list, preview request, and tab activation."
   (let* ((timeout 10.0)
@@ -49,32 +74,38 @@
                                      "tabs list is empty after doctor: %S"
                                      (hyprland-zen-status))
 
-    (setq tab (or (cl-find-if (lambda (it)
-                                (hyprland-zen--truthy-p (hyprland-zen--field it 'active)))
-                              tabs)
-                  (car tabs))
+    (setq tab (hyprland-zen-live-smoke--pick-tab tabs)
           tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
     (hyprland-zen-live-smoke--assert (not (string-empty-p tab-id))
                                      "selected tab has empty tab_id: %S"
                                      tab)
 
     ;; Batch smoke should verify preview protocol readiness without requiring GUI image rendering.
-    (cl-letf (((symbol-function 'hyprland-zen--display-preview-data-url)
-               (lambda (_data-url) t))
-              ((symbol-function 'hyprland-zen--display-preview-message)
-               (lambda (_message) nil)))
-      (setq hyprland-zen--preview-tab-id tab-id
-            preview-ts-before hyprland-zen--last-preview-response-at)
-      (hyprland-zen--send `((op . "capture-tab") (tab_id . ,tab-id)))
-      (hyprland-zen-live-smoke--assert
-       (hyprland-zen-live-smoke--wait
-        (lambda ()
-          (and hyprland-zen--last-preview-response-at
-               (or (null preview-ts-before)
-                   (> hyprland-zen--last-preview-response-at preview-ts-before))))
-        timeout)
-       "capture-tab did not yield preview response; status=%S"
-       (hyprland-zen-status)))
+    (if (hyprland-zen-live-smoke--capturable-url-p
+         (hyprland-zen--string (hyprland-zen--field tab 'url)))
+        (cl-letf (((symbol-function 'hyprland-zen--display-preview-data-url)
+                   (lambda (_data-url) t))
+                  ((symbol-function 'hyprland-zen--display-preview-message)
+                   (lambda (_message) nil)))
+          (setq hyprland-zen--preview-tab-id tab-id
+                preview-ts-before hyprland-zen--last-preview-response-at)
+          (hyprland-zen--send `((op . "capture-tab") (tab_id . ,tab-id)))
+          (hyprland-zen-live-smoke--assert
+           (hyprland-zen-live-smoke--wait
+            (lambda ()
+              (or (and hyprland-zen--last-preview-response-at
+                       (or (null preview-ts-before)
+                           (> hyprland-zen--last-preview-response-at preview-ts-before)))
+                  (string= hyprland-zen--last-error-op "capture-tab")))
+            timeout)
+           "capture-tab did not complete; status=%S"
+           (hyprland-zen-status))
+          (when (string= hyprland-zen--last-error-op "capture-tab")
+            (hyprland-zen-live-smoke--fail
+             "capture-tab reported error: %S"
+             (hyprland-zen-status))))
+      (princ (format "[hyprland-zen-live] skip preview check for non-capturable url: %s\n"
+                     (hyprland-zen--string (hyprland-zen--field tab 'url)))))
 
     (setq activated-key (hyprland-zen-tab-switch tab))
     (hyprland-zen-live-smoke--assert activated-key

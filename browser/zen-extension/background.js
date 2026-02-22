@@ -12,6 +12,36 @@ const PREVIEW_SCALE_STEPS = [1.0, 0.85, 0.7, 0.55, 0.42];
 let nativePort = null;
 let reconnectTimer = null;
 
+function resetNativePort() {
+  if (!nativePort) {
+    return;
+  }
+  try {
+    nativePort.onMessage.removeListener(onNativeMessage);
+  } catch (_err) {
+    void _err;
+  }
+  try {
+    nativePort.onDisconnect.removeListener(onNativeDisconnect);
+  } catch (_err) {
+    void _err;
+  }
+  try {
+    nativePort.disconnect();
+  } catch (_err) {
+    void _err;
+  }
+  nativePort = null;
+}
+
+function requestReconnect(reason) {
+  if (ENABLE_CONSOLE_FALLBACK && reason) {
+    console.warn("[hyprland-zen-extension] reconnect", { reason });
+  }
+  resetNativePort();
+  scheduleReconnect();
+}
+
 function messageBytes(message) {
   try {
     return new TextEncoder().encode(JSON.stringify(message)).length;
@@ -27,7 +57,8 @@ function postNative(message) {
   try {
     nativePort.postMessage(message);
     return true;
-  } catch (_err) {
+  } catch (err) {
+    requestReconnect(err?.message || String(err));
     return false;
   }
 }
@@ -88,6 +119,7 @@ function uniqueWorkspaces(tabs) {
 
 function send(message) {
   if (!nativePort) {
+    scheduleReconnect();
     if (ENABLE_CONSOLE_FALLBACK) {
       console.debug("[hyprland-zen-extension]", message);
     }
@@ -293,8 +325,7 @@ function onNativeMessage(message) {
 }
 
 function onNativeDisconnect() {
-  nativePort = null;
-  scheduleReconnect();
+  requestReconnect("native-disconnect");
 }
 
 function scheduleReconnect() {
@@ -321,9 +352,13 @@ function wireTabEvents() {
   });
 
   browser.tabs.onActivated.addListener(async ({ tabId }) => {
-    const tab = await browser.tabs.get(tabId);
-    send({ type: "upsert", tab: tabPayload(tab) });
-    send({ type: "workspace-upsert", workspace: workspacePayloadFromTab(tab) });
+    try {
+      const tab = await browser.tabs.get(tabId);
+      send({ type: "upsert", tab: tabPayload(tab) });
+      send({ type: "workspace-upsert", workspace: workspacePayloadFromTab(tab) });
+    } catch (err) {
+      sendError("tab-activated", err?.message || String(err));
+    }
   });
 
   browser.tabs.onRemoved.addListener((tabId, removeInfo) => {

@@ -27,10 +27,77 @@
   "Print one KEY/VALUE status line."
   (princ (format "[hyprland-zen-check] %s=%s\n" key value)))
 
-(defun hyprland-zen-check--print-hints (status)
-  "Print actionable hints using bridge STATUS plist."
+(defun hyprland-zen-check--trim-string (s &optional max-len)
+  "Return S trimmed to MAX-LEN characters with ellipsis when needed."
+  (let* ((raw (if (stringp s) s (format "%s" s)))
+         (limit (or max-len 140)))
+    (if (> (length raw) limit)
+        (concat (substring raw 0 limit) "...")
+      raw)))
+
+(defun hyprland-zen-check--payload-summary (payload)
+  "Return compact summary string for one bridge PAYLOAD."
+  (cond
+   ((not (listp payload))
+    (hyprland-zen-check--trim-string payload 120))
+   (t
+    (let* ((type (hyprland-zen--string (hyprland-zen--field payload 'type)))
+           (op (hyprland-zen--string (hyprland-zen--field payload 'op)))
+           (tabs (hyprland-zen--field payload 'tabs))
+           (workspaces (hyprland-zen--field payload 'workspaces))
+           (tab (hyprland-zen--field payload 'tab))
+           (workspace (hyprland-zen--field payload 'workspace))
+           (tab-id (or (hyprland-zen--field payload 'tab_id)
+                       (hyprland-zen--field tab 'tab_id)))
+           (workspace-id (or (hyprland-zen--field payload 'workspace_id)
+                             (hyprland-zen--field workspace 'workspace_id)))
+           (key (hyprland-zen--field payload 'key))
+           (msg (hyprland-zen--field payload 'message))
+           parts)
+      (when (not (string-empty-p type))
+        (push (format "type=%s" type) parts))
+      (when (not (string-empty-p op))
+        (push (format "op=%s" op) parts))
+      (when (listp tabs)
+        (push (format "tabs=%d" (length tabs)) parts))
+      (when (listp workspaces)
+        (push (format "workspaces=%d" (length workspaces)) parts))
+      (when tab-id
+        (push (format "tab_id=%s" tab-id) parts))
+      (when workspace-id
+        (push (format "workspace_id=%s" workspace-id) parts))
+      (when key
+        (push (format "key=%s" key) parts))
+      (when msg
+        (push (format "message=%s" (hyprland-zen-check--trim-string msg 90)) parts))
+      (if parts
+          (mapconcat #'identity (nreverse parts) " ")
+        "payload=<unrecognized>")))))
+
+(defun hyprland-zen-check--print-trace-summary (&optional limit)
+  "Print compact summary of recent bridge trace entries up to LIMIT."
+  (let* ((n (max 1 (or limit 16)))
+         (entries (cl-subseq hyprland-zen--trace 0 (min n (length hyprland-zen--trace)))))
+    (princ "[hyprland-zen-check] trace-summary-begin\n")
+    (if (null entries)
+        (princ "[hyprland-zen-check] trace=<empty>\n")
+      (dolist (entry entries)
+        (let* ((ts (or (plist-get entry :ts) 0.0))
+               (dir (or (plist-get entry :dir) "?"))
+               (payload (plist-get entry :payload))
+               (summary (hyprland-zen-check--payload-summary payload)))
+          (princ (format "[hyprland-zen-check] trace ts=%s dir=%s %s\n"
+                         (format-time-string "%F %T" (seconds-to-time ts))
+                         dir
+                         summary)))))
+    (princ "[hyprland-zen-check] trace-summary-end\n")))
+
+(defun hyprland-zen-check--print-hints (status ready)
+  "Print actionable hints using bridge STATUS plist and READY flag."
   (let ((msg (or (plist-get status :last-error-message) "")))
     (cond
+     (ready
+      (princ "[hyprland-zen-check] hint: Bridge is ready. If commands still fail, run live mode and inspect trace summary timestamps around failures.\n"))
      ((string-match-p "browser-bridge-not-connected" msg)
       (princ "[hyprland-zen-check] hint: Browser extension is not connected to Native Messaging host.\n")
       (princ "[hyprland-zen-check] hint: Open Browser Toolbox and verify extension logs from browser/zen-extension/background.js.\n")
@@ -50,6 +117,7 @@
          (report nil)
          (status nil)
          (fatal nil)
+         (ready nil)
          (exit-code 1))
     (let ((hyprland-zen-error-notify-throttle-seconds 3600.0)
           (inhibit-message t)
@@ -71,9 +139,13 @@
           (when (string-match-p "Unable to resolve" fatal)
             (princ "[hyprland-zen-check] hint: install browser/native-host/hyprland-zen-native-host or set hyprland-zen-host-command.\n")))
       (progn
+        (setq ready (and (plist-get report :running)
+                         (plist-get report :tabs-ready)
+                         (plist-get report :workspaces-ready)))
         (hyprland-zen-check--print-kv "running" (if (plist-get report :running) "yes" "no"))
         (hyprland-zen-check--print-kv "tabs-ready" (plist-get report :tabs-ready))
-        (hyprland-zen-check--print-kv "workspaces-ready" (plist-get report :workspaces-ready))))
+        (hyprland-zen-check--print-kv "workspaces-ready" (plist-get report :workspaces-ready))
+        (hyprland-zen-check--print-kv "result" (if ready "PASS" "FAIL"))))
 
     (when status
       (hyprland-zen-check--print-kv "tab-count" (plist-get status :tab-count))
@@ -84,21 +156,10 @@
       (hyprland-zen-check--print-kv "last-error-message" (or (plist-get status :last-error-message) "")))
 
     (when status
-      (hyprland-zen-check--print-hints status)
-      (when-let* ((buf (ignore-errors (hyprland-zen-trace-report 12))))
-        (princ "[hyprland-zen-check] trace-begin\n")
-        (with-current-buffer buf
-          (princ (buffer-substring-no-properties (point-min) (point-max))))
-        (princ "[hyprland-zen-check] trace-end\n")))
+      (hyprland-zen-check--print-hints status ready)
+      (hyprland-zen-check--print-trace-summary 16))
 
-    (setq exit-code
-          (if (and (not fatal)
-                   report
-                   (plist-get report :running)
-                   (plist-get report :tabs-ready)
-                   (plist-get report :workspaces-ready))
-              0
-            1))
+    (setq exit-code (if (and (not fatal) ready) 0 1))
 
     (ignore-errors (hyprland-zen-stop))
     (kill-emacs exit-code)))

@@ -310,6 +310,25 @@ Run everything in one command:
 bash scripts/hyprland-zen-test.sh all
 #+end_src
 
+Recommended troubleshooting sequence:
+
+1. ~bash scripts/hyprland-zen-test.sh unit~
+2. ~bash scripts/hyprland-zen-test.sh doctor~
+3. ~bash scripts/hyprland-zen-test.sh live~
+
+How to read failures quickly:
+
+- ~doctor~ prints ~result=PASS/FAIL~ and compact ~trace-summary~ lines.
+- If ~last-error-message~ contains ~browser-bridge-not-connected~:
+  - reload Zen/Firefox extension (or toggle it off/on)
+  - verify native host manifest path + extension id match
+  - rerun ~doctor~
+- If ~live~ fails at ~capture-tab~:
+  - keep at least one normal ~http/https~ tab open and active
+  - rerun ~live~ (privileged pages like ~about:*~ may not be capturable)
+- If you see ~already running at ...sock~:
+  - an old host instance is holding the socket; stop bridge/process and rerun.
+
 Optional timeout override for doctor:
 
 #+begin_src bash
