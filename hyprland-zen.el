@@ -72,6 +72,7 @@ Examples:
 (defvar hyprland-zen--process nil)
 (defvar hyprland-zen--fragment "")
 (defvar hyprland-zen--preview-tab-id nil)
+(defvar hyprland-zen--preview-candidates nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -227,9 +228,19 @@ ACTION and CAND follow Consult's :state contract."
     ('preview
      (if (not cand)
          (hyprland-zen--display-preview-message "No tab candidate")
-       (let ((tab-id (hyprland-zen--string (hyprland-zen--field cand 'tab_id))))
+       (let* ((tab (cond
+                    ((and (listp cand) (hyprland-zen--field cand 'tab_id))
+                     cand)
+                    ((and (stringp cand)
+                          (fboundp 'consult--lookup-cdr)
+                          hyprland-zen--preview-candidates)
+                     (consult--lookup-cdr cand hyprland-zen--preview-candidates nil))
+                    ((and (stringp cand) hyprland-zen--preview-candidates)
+                     (cdr (assoc cand hyprland-zen--preview-candidates)))
+                    (t nil)))
+              (tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id))))
          (if (string-empty-p tab-id)
-             (hyprland-zen--display-preview-message "Candidate missing tab id")
+             (hyprland-zen--display-preview-message "Candidate missing tab metadata")
            (setq hyprland-zen--preview-tab-id tab-id)
            (hyprland-zen--display-preview-message "Loading tab preview...")
            (condition-case err
@@ -240,6 +251,7 @@ ACTION and CAND follow Consult's :state contract."
                (format "Preview request failed: %s" (error-message-string err)))))))))
     ((or 'exit 'return)
      (setq hyprland-zen--preview-tab-id nil)
+     (setq hyprland-zen--preview-candidates nil)
      (hyprland-consult--cleanup-preview))))
 
 (defun hyprland-zen--wait-for-tabs (&optional timeout)
@@ -533,69 +545,69 @@ Active tabs are sorted first, then by title."
   (let ((type (hyprland-zen--message-type message)))
     (hyprland-zen--touch-line type)
     (pcase type
-    ("snapshot"
-     (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
-     (hyprland-zen--clear-store)
-     (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
-       (hyprland-zen--store-workspace workspace))
-     (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
-       (hyprland-zen--store-tab tab))
-     (run-hooks 'hyprland-zen-after-refresh-hook)
-     t)
-    ((or "workspace-snapshot" "workspace_snapshot")
-     (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
-     (clrhash hyprland-zen--workspaces)
-     (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
-       (hyprland-zen--store-workspace workspace))
-     (run-hooks 'hyprland-zen-after-refresh-hook)
-     t)
-    ("upsert"
-     (when-let* ((tab (or (hyprland-zen--field message 'tab)
-                          message))
-                 (stored (hyprland-zen--store-tab tab)))
-       (when (hyprland-zen--truthy-p (hyprland-zen--field stored 'active))
-         (when-let* ((window-id (hyprland-zen--window-id stored)))
-           (hyprland-zen--schedule-window-address-refresh window-id)))
+      ("snapshot"
+       (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
+       (hyprland-zen--clear-store)
+       (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+         (hyprland-zen--store-workspace workspace))
+       (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
+         (hyprland-zen--store-tab tab))
        (run-hooks 'hyprland-zen-after-refresh-hook)
-       t))
-    ((or "workspace-upsert" "workspace_upsert")
-     (when-let* ((workspace (or (hyprland-zen--field message 'workspace)
-                                message)))
-       (hyprland-zen--store-workspace workspace)
+       t)
+      ((or "workspace-snapshot" "workspace_snapshot")
+       (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
+       (clrhash hyprland-zen--workspaces)
+       (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
+         (hyprland-zen--store-workspace workspace))
        (run-hooks 'hyprland-zen-after-refresh-hook)
-       t))
-    ("remove"
-     (when-let* ((key (hyprland-zen--remove-message-key message)))
-       (hyprland-zen--remove-tab-by-key key)
-       (run-hooks 'hyprland-zen-after-refresh-hook)
-       t))
-    ((or "workspace-remove" "workspace_remove")
-     (when-let* ((key (hyprland-zen--remove-workspace-key message)))
-       (remhash key hyprland-zen--workspaces)
-       (run-hooks 'hyprland-zen-after-refresh-hook)
-       t))
-    ("preview"
-     (let ((tab-id (hyprland-zen--string (hyprland-zen--field message 'tab_id))))
-       (setq hyprland-zen--last-preview-response-at hyprland-zen--last-line-at)
-        (when (and hyprland-zen--preview-tab-id
-                   (string= tab-id hyprland-zen--preview-tab-id))
-          (hyprland-zen--display-preview-data-url
-          (hyprland-zen--string (hyprland-zen--field message 'image_data_url)))
-         t)))
-    ("error"
-     (hyprland-zen--record-error
-      (hyprland-zen--field message 'message)
-      (hyprland-zen--field message 'op))
-     (when (and hyprland-zen--preview-tab-id
-                 (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
-        (hyprland-zen--display-preview-message
-        (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
-     (hyprland--debug "zen host error: %s"
-                      (hyprland-zen--string (hyprland-zen--field message 'message) "unknown"))
-     nil)
-    (_
-     (hyprland--debug "zen host unknown payload: %S" message)
-     nil))))
+       t)
+      ("upsert"
+       (when-let* ((tab (or (hyprland-zen--field message 'tab)
+                            message))
+                   (stored (hyprland-zen--store-tab tab)))
+         (when (hyprland-zen--truthy-p (hyprland-zen--field stored 'active))
+           (when-let* ((window-id (hyprland-zen--window-id stored)))
+             (hyprland-zen--schedule-window-address-refresh window-id)))
+         (run-hooks 'hyprland-zen-after-refresh-hook)
+         t))
+      ((or "workspace-upsert" "workspace_upsert")
+       (when-let* ((workspace (or (hyprland-zen--field message 'workspace)
+                                  message)))
+         (hyprland-zen--store-workspace workspace)
+         (run-hooks 'hyprland-zen-after-refresh-hook)
+         t))
+      ("remove"
+       (when-let* ((key (hyprland-zen--remove-message-key message)))
+         (hyprland-zen--remove-tab-by-key key)
+         (run-hooks 'hyprland-zen-after-refresh-hook)
+         t))
+      ((or "workspace-remove" "workspace_remove")
+       (when-let* ((key (hyprland-zen--remove-workspace-key message)))
+         (remhash key hyprland-zen--workspaces)
+         (run-hooks 'hyprland-zen-after-refresh-hook)
+         t))
+      ("preview"
+       (let ((tab-id (hyprland-zen--string (hyprland-zen--field message 'tab_id))))
+         (setq hyprland-zen--last-preview-response-at hyprland-zen--last-line-at)
+         (when (and hyprland-zen--preview-tab-id
+                    (string= tab-id hyprland-zen--preview-tab-id))
+           (hyprland-zen--display-preview-data-url
+            (hyprland-zen--string (hyprland-zen--field message 'image_data_url)))
+           t)))
+      ("error"
+       (hyprland-zen--record-error
+        (hyprland-zen--field message 'message)
+        (hyprland-zen--field message 'op))
+       (when (and hyprland-zen--preview-tab-id
+                  (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
+         (hyprland-zen--display-preview-message
+          (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
+       (hyprland--debug "zen host error: %s"
+                        (hyprland-zen--string (hyprland-zen--field message 'message) "unknown"))
+       nil)
+      (_
+       (hyprland--debug "zen host unknown payload: %S" message)
+       nil))))
 
 (defun hyprland-zen--parse-json (line)
   "Parse JSON LINE into Lisp object, returning nil on failure."
@@ -661,10 +673,10 @@ Active tabs are sorted first, then by title."
       (unless resolved
         (user-error "Unable to resolve `%s'; install browser/native-host/hyprland-zen-native-host or set `hyprland-zen-host-command'"
                     (car hyprland-zen-host-command)))
-       (setq hyprland-zen--fragment "")
-       (hyprland-zen--reset-runtime-metrics)
-       (setq hyprland-zen--started-at (hyprland-zen--now))
-       (setq hyprland-zen--process
+      (setq hyprland-zen--fragment "")
+      (hyprland-zen--reset-runtime-metrics)
+      (setq hyprland-zen--started-at (hyprland-zen--now))
+      (setq hyprland-zen--process
             (make-process
              :name "hyprland-zen-bridge"
              :command resolved
@@ -789,13 +801,14 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
        "No Zen tabs available (bridge disconnected or extension not ready). Check `M-x hyprland-zen-status' / `M-x hyprland-zen-doctor'"))
     (if (and (fboundp 'consult--read)
              (fboundp 'consult--lookup-cdr))
-        (consult--read cands
-                       :prompt prompt
-                       :require-match t
-                       :sort nil
-                       :lookup #'consult--lookup-cdr
-                       :preview-key hyprland-zen-preview-key
-                       :state #'hyprland-zen--preview-state)
+        (let ((hyprland-zen--preview-candidates cands))
+          (consult--read cands
+                         :prompt prompt
+                         :require-match t
+                         :sort nil
+                         :lookup #'consult--lookup-cdr
+                         :preview-key hyprland-zen-preview-key
+                         :state #'hyprland-zen--preview-state))
       (cdr (assoc (completing-read prompt cands nil t) cands)))))
 
 (defun hyprland-zen--read-workspace (prompt)
