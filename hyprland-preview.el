@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 
-;; Async static preview capture with pluggable backends and single-flight semantics.
+;; Async static preview capture via grim -T with single-flight semantics.
 
 ;;; Code:
 
@@ -12,31 +12,14 @@
 (require 'subr-x)
 (require 'hyprland-base)
 
-(defvar hyprland-preview--grim-supports-target nil)
 (defvar hyprland-preview--cache (make-hash-table :test #'equal))
 (defvar hyprland-preview--cache-bytes 0)
 (defvar hyprland-preview--active-process nil)
 (defvar hyprland-preview--active-token 0)
 (defvar hyprland-preview--active-restore-address nil)
 
-(defcustom hyprland-preview-capture-backend 'auto
-  "Preview capture backend.
-
-`auto' tries toplevel helper first, then falls back to grim.
-`toplevel' requires external helper (`hyprland-toplevel-snap').
-`grim' uses screencopy-based grim path only."
-  :type '(choice (const :tag "Auto" auto)
-          (const :tag "Toplevel helper" toplevel)
-          (const :tag "Grim" grim))
-  :group 'hyprland)
-
-(defcustom hyprland-preview-toplevel-helper-executable "hyprland-toplevel-snap"
-  "Executable used for toplevel-export capture backend."
-  :type 'string
-  :group 'hyprland)
-
 (defcustom hyprland-preview-overlay-cursor nil
-  "When non-nil, include cursor in helper-based captures where supported."
+  "When non-nil, include cursor in grim captures."
   :type 'boolean
   :group 'hyprland)
 
@@ -96,14 +79,6 @@ window briefly and restoring prior focus after capture."
       (or (string-match-p hyprland-preview-sensitive-regexp title)
           (string-match-p hyprland-preview-sensitive-regexp class)))))
 
-(defun hyprland-preview--grim-supports-target-p ()
-  "Return non-nil if `grim -h' advertises -T support."
-  (or hyprland-preview--grim-supports-target
-      (setq hyprland-preview--grim-supports-target
-            (condition-case nil
-                (string-match-p "-T" (hyprland--call-process-to-string hyprland-grim-executable "-h"))
-              (error nil)))))
-
 (defun hyprland-preview--stable-id->identifier (stable-id)
   "Convert STABLE-ID to lower-case hex string without 0x.
 
@@ -117,15 +92,6 @@ Return nil when conversion fails validation."
           (t nil))))
     (when (and id (string-match-p "\\`[0-9a-f]+\\'" id))
       id)))
-
-(defun hyprland-preview--geometry (window)
-  "Return grim geometry string for WINDOW, or nil.
-
-WINDOW should contain alist fields `at' and `size' as two-element lists."
-  (let* ((at (alist-get 'at window))
-         (size (alist-get 'size window)))
-    (when (and (listp at) (= (length at) 2) (listp size) (= (length size) 2))
-      (format "%s,%s %sx%s" (nth 0 at) (nth 1 at) (nth 0 size) (nth 1 size)))))
 
 (defun hyprland-preview--cache-key (window)
   "Build preview cache key for WINDOW."
@@ -194,40 +160,15 @@ WINDOW should contain alist fields `at' and `size' as two-element lists."
     (let ((attrs (file-attributes path 'string)))
       (and attrs (> (file-attribute-size attrs) 0)))))
 
-(defun hyprland-preview--toplevel-helper-path ()
-  "Return absolute path of toplevel helper executable, or nil."
-  (when (stringp hyprland-preview-toplevel-helper-executable)
-    (let ((from-path (executable-find hyprland-preview-toplevel-helper-executable)))
-      (or (and (hyprland-preview--usable-executable-p from-path) from-path)
-          (let* ((lib (or load-file-name (locate-library "hyprland-preview")))
-                 (root (and lib (file-name-directory lib)))
-                 (local (and root (expand-file-name "tools/hyprland-toplevel-snap" root))))
-            (when (hyprland-preview--usable-executable-p local)
-              local))))))
-
 (defun hyprland-preview--capture-args (window)
   "Return grim command args for capturing WINDOW preview.
 
-Prefer grim -T when supported and stable id is valid; otherwise use grim -g.
-Signal an error if neither mode can be formed."
-  (let ((identifier (hyprland-preview--stable-id->identifier (alist-get 'stable_id window)))
-        (geometry (hyprland-preview--geometry window)))
-    (cond
-     ((and (hyprland-preview--grim-supports-target-p) identifier)
-      (list "-T" identifier "-"))
-     (geometry
-      (list "-g" geometry "-"))
-     (t
-      (error "Unable to build grim args for preview")))))
-
-(defun hyprland-preview--toplevel-capture-attempt (window)
-  "Build toplevel helper capture attempt for WINDOW, or nil."
-  (when-let* ((helper (hyprland-preview--toplevel-helper-path))
-              (address (alist-get 'address window)))
-    (list :backend 'toplevel
-          :program helper
-          :args (append (when hyprland-preview-overlay-cursor (list "--cursor"))
-                        (list "--address" (hyprland--normalize-address address))))))
+Signal an error when stable id cannot be converted into grim identifier."
+  (let ((identifier (hyprland-preview--stable-id->identifier (alist-get 'stable_id window))))
+    (unless identifier
+      (error "Window missing stable_id for grim -T capture"))
+    (append (when hyprland-preview-overlay-cursor (list "-c"))
+            (list "-T" identifier "-"))))
 
 (defun hyprland-preview--grim-capture-attempt (window)
   "Build grim capture attempt for WINDOW, or nil when args cannot be formed."
@@ -238,13 +179,10 @@ Signal an error if neither mode can be formed."
     (error nil)))
 
 (defun hyprland-preview--capture-attempts (window)
-  "Build ordered capture attempt list for WINDOW based on backend policy."
-  (let ((helper (hyprland-preview--toplevel-capture-attempt window))
-        (grim (hyprland-preview--grim-capture-attempt window)))
-    (pcase hyprland-preview-capture-backend
-      ('toplevel (delq nil (list helper)))
-      ('grim (delq nil (list grim)))
-      (_ (delq nil (list helper grim))))))
+  "Build capture attempt list for WINDOW.
+
+Current implementation uses grim -T only."
+  (delq nil (list (hyprland-preview--grim-capture-attempt window))))
 
 (defun hyprland-preview--cancel-active-process ()
   "Cancel the currently active capture process, if any."
@@ -338,7 +276,7 @@ Requests are single-flight: starting a new request cancels the prior one."
               (funcall callback
                        (list :ok nil
                              :reason 'no-capture-backend
-                             :message "No available preview backend (helper/grim)"))
+                             :message "No available preview backend (grim -T)"))
             (cl-labels
                 ((run-attempt (remaining)
                    (let* ((attempt (car remaining))

@@ -17,8 +17,7 @@ Current version: ~0.1.0~ (early but usable).
 - Emacs 29.1+
 - Hyprland session (with ~HYPRLAND_INSTANCE_SIGNATURE~ in Emacs env)
 - ~hyprctl~ in PATH
-- ~grim~ in PATH (for static preview)
-- Optional: ~hyprland-toplevel-snap~ helper (for workspace/occlusion-robust preview)
+- ~grim~ in PATH (preview capture uses ~grim -T~)
 - [[https://github.com/minad/consult][consult]] (for ~hyprland-window-switch~)
 - Optional: ~hyprland-zen-native-host~ executable (for ~hyprland-zen-*~ commands)
 - Optional: Zen/Firefox WebExtension under ~browser/zen-extension/~
@@ -57,22 +56,6 @@ Core commands:
 - ~M-x hyprland-zen-tab-switch~: choose and activate a Zen tab
 - ~M-x hyprland-zen-workspace-switch~: choose and activate a Zen workspace
 - ~M-x hyprland-sync-stop~: stop socket/timers
-
-* Hyprland snapshot helper (recommended)
-
-Build helper with ~hyprwayland-scanner~:
-
-#+begin_src bash
-make -C tools
-#+end_src
-
-By default, preview backend is ~auto~:
-
-- try ~hyprland-toplevel-snap~ first
-- fallback to ~grim~ when helper is unavailable/fails
-
-If helper is not installed in PATH, this repo's local path
-~tools/hyprland-toplevel-snap~ is auto-detected.
 
 * Ibuffer workflow (recommended)
 
@@ -201,8 +184,7 @@ Important options:
 - ~hyprland-preview-cache-mode~: ~memory-only~ (default) or ~disk~
 - ~hyprland-preview-cache-directory~: cache directory when using disk mode
 - ~hyprland-preview-cache-max-entries~ / ~hyprland-preview-cache-max-bytes~: in-memory preview cache bounds
-- ~hyprland-preview-capture-backend~: ~auto~ (default), ~toplevel~, or ~grim~
-- ~hyprland-preview-toplevel-helper-executable~: helper executable name/path
+- ~hyprland-preview-overlay-cursor~: include cursor in ~grim -T~ captures
 - ~hyprland-preview-focus-for-accurate-capture~: default ~nil~ (avoid focus flicker); set ~t~ only if you prefer aggressive grim fallback accuracy
 - ~hyprland-consult-preview-key~: Consult preview trigger (e.g. ~any~, ~(:debounce 0.3 any)~, ~"M-."~, or ~nil~)
 - ~hyprland-consult-preview-display~: ~current-window~ (default, Consult-style) or ~side-window~
