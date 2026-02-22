@@ -44,8 +44,8 @@ The host process exchanges one JSON object per line with Emacs."
 (defcustom hyprland-zen-jump-to-window-on-tab-switch t
   "When non-nil, tab switch also focuses corresponding Hyprland window.
 
-This uses browser-side window focus first, and keeps a best-effort mapping from
-browser window ids to Hyprland addresses for explicit `hyprland-jump' fallback."
+Window selection is resolved from title-matching keywords before/after
+`activate-tab`, avoiding long-lived window-address caches."
   :type 'boolean
   :group 'hyprland-zen)
 
@@ -105,9 +105,6 @@ diagnosis in real environments."
 
 (defvar hyprland-zen--workspaces (make-hash-table :test #'equal)
   "Zen workspace store keyed by `browser/profile/workspace_id'.")
-
-(defvar hyprland-zen--browser-window->hyprland-address (make-hash-table :test #'equal)
-  "Best-effort map from browser window id to Hyprland address.")
 
 (defvar hyprland-zen--process nil)
 (defvar hyprland-zen--fragment "")
@@ -195,35 +192,6 @@ diagnosis in real environments."
       (unless (string-empty-p out)
         out))))
 
-(defun hyprland-zen--active-hyprland-window-address ()
-  "Return active Hyprland window address when class matches zen browser regexp."
-  (condition-case _err
-      (when-let* ((active (hyprland--hyprctl-json "activewindow"))
-                  (address-raw (hyprland-zen--field active 'address))
-                  (address (hyprland--normalize-address address-raw)))
-        (let* ((class (downcase (hyprland-zen--string (hyprland-zen--field active 'class))))
-               (ok (or (null hyprland-zen-window-class-regexp)
-                       (string-match-p hyprland-zen-window-class-regexp class))))
-          (when ok address)))
-    (error nil)))
-
-(defun hyprland-zen--remember-window-address (window-id &optional address)
-  "Store mapping from browser WINDOW-ID to Hyprland ADDRESS.
-
-When ADDRESS is nil, use current active Hyprland window address."
-  (when-let* ((wid (hyprland-zen--string window-id))
-              (_ (not (string-empty-p wid)))
-              (resolved (or address (hyprland-zen--active-hyprland-window-address))))
-    (puthash wid resolved hyprland-zen--browser-window->hyprland-address)
-    resolved))
-
-(defun hyprland-zen--schedule-window-address-refresh (window-id)
-  "Refresh browser WINDOW-ID -> Hyprland address mapping shortly after focus."
-  (when (and hyprland-zen-jump-to-window-on-tab-switch
-             (stringp window-id)
-             (not (string-empty-p window-id)))
-    (run-at-time 0.12 nil #'hyprland-zen--remember-window-address window-id)))
-
 (defun hyprland-zen--browser-class-p (class)
   "Return non-nil when CLASS looks like configured browser class."
   (let ((c (downcase (hyprland-zen--string class))))
@@ -267,104 +235,96 @@ When ADDRESS is nil, use current active Hyprland window address."
   (when-let* ((raw (hyprland-zen--field client 'address)))
     (hyprland--normalize-address raw)))
 
-(defun hyprland-zen--find-client-by-address (address clients)
-  "Find browser client by normalized ADDRESS within CLIENTS list."
-  (let ((needle (hyprland-zen--string address)))
-    (cl-find-if (lambda (client)
-                  (string= needle (hyprland-zen--string (hyprland-zen--client-address client))))
-                clients)))
+(defun hyprland-zen--best-match-addresses-by-title (title &optional clients)
+  "Return addresses with highest title-match score for TITLE.
 
-(defun hyprland-zen--cache-address-valid-p (address tab-title clients)
-  "Return non-nil when cached ADDRESS looks valid for TAB-TITLE.
+When TITLE is empty or no browser client matches, return nil."
+  (let* ((target (hyprland-zen--string title))
+         (pool (or clients (hyprland-zen--browser-clients)))
+         (best-score 0)
+         addresses)
+    (unless (string-empty-p target)
+      (dolist (client pool)
+        (let* ((score (hyprland-zen--title-match-score
+                       (hyprland-zen--field client 'title)
+                       target))
+               (address (hyprland-zen--client-address client)))
+          (when (and (stringp address)
+                     (not (string-empty-p address))
+                     (> score 0))
+            (cond
+             ((> score best-score)
+              (setq best-score score
+                    addresses (list address)))
+             ((= score best-score)
+              (push address addresses)))))))
+    (cl-delete-duplicates (nreverse addresses) :test #'string=)))
 
-When TAB-TITLE is non-empty, require at least prefix/contains-level similarity
-to reduce stale-cache wrong jumps across multiple browser windows."
-  (when-let* ((client (hyprland-zen--find-client-by-address address clients)))
-    (let ((title (hyprland-zen--string tab-title)))
-      (or (string-empty-p title)
-          (>= (hyprland-zen--title-match-score
-               (hyprland-zen--field client 'title)
-               title)
-              60)))))
+(defun hyprland-zen--address-intersection (lhs rhs)
+  "Return string-set intersection of address lists LHS and RHS."
+  (let ((rhs-set (make-hash-table :test #'equal))
+        out)
+    (dolist (it rhs)
+      (puthash it t rhs-set))
+    (dolist (it lhs)
+      (when (gethash it rhs-set)
+        (push it out)))
+    (cl-delete-duplicates (nreverse out) :test #'string=)))
 
-(defun hyprland-zen--resolve-address-by-tab-title (tab-title)
-  "Resolve Hyprland window address by matching TAB-TITLE against client titles."
-  (let ((best-score 0)
-        (best-address nil)
-        (ambiguous nil))
-    (dolist (client (hyprland-zen--browser-clients))
-      (let* ((score (hyprland-zen--title-match-score
-                     (hyprland-zen--field client 'title)
-                     tab-title))
-             (address (hyprland-zen--client-address client)))
-        (when (and (stringp address)
-                   (not (string-empty-p address))
-                   (> score 0))
-          (cond
-           ((> score best-score)
-            (setq best-score score
-                  best-address address
-                  ambiguous nil))
-           ((and (= score best-score)
-                 (string= address best-address))
-            nil)
-           ((= score best-score)
-            (setq ambiguous t))))))
-    (and (> best-score 0)
-         (not ambiguous)
-         best-address)))
+(defun hyprland-zen--address-present-p (address clients)
+  "Return non-nil when ADDRESS appears in CLIENTS list."
+  (cl-some (lambda (client)
+             (string= (hyprland-zen--string address)
+                      (hyprland-zen--string (hyprland-zen--client-address client))))
+           clients))
 
-(defun hyprland-zen--jump-to-window-by-title (&optional tab-title window-id)
-  "Try jump by TAB-TITLE or active tab title of WINDOW-ID."
+(defun hyprland-zen--resolve-post-activate-address (keyword1-addresses target-title)
+  "Resolve jump address from KEYWORD1-ADDRESSES and TARGET-TITLE.
+
+KEYWORD1-ADDRESSES come from pre-activate window-title matching.
+TARGET-TITLE provides post-activate title matching candidates."
+  (let* ((clients (hyprland-zen--browser-clients))
+         (k1 (cl-delete-duplicates (copy-sequence (or keyword1-addresses nil)) :test #'string=))
+         (k2 (hyprland-zen--best-match-addresses-by-title target-title clients)))
+    (cond
+     ((= (length k1) 1)
+      (let ((only (car k1)))
+        (when (hyprland-zen--address-present-p only clients)
+          only)))
+     ((> (length k1) 1)
+      (let ((hits (hyprland-zen--address-intersection k1 k2)))
+        (when (= (length hits) 1)
+          (car hits))))
+     ((= (length k2) 1)
+      (car k2))
+     (t nil))))
+
+(defun hyprland-zen--jump-to-known-window (keyword1-addresses target-title)
+  "Jump by keyword matching strategy.
+
+KEYWORD1-ADDRESSES are pre-activate matches; TARGET-TITLE is post-activate tab
+title used as keyword2."
   (when (and hyprland-zen-jump-to-window-on-tab-switch
              hyprland-zen-jump-match-by-title
              (fboundp 'hyprland-jump))
-    (let* ((derived-title
-            (or (let ((title (hyprland-zen--string tab-title)))
-                  (unless (string-empty-p title) title))
-                (when-let* ((tab (hyprland-zen--active-tab-for-window window-id)))
-                  (hyprland-zen--string (hyprland-zen--field tab 'title)))))
-           (address (and derived-title
-                         (hyprland-zen--resolve-address-by-tab-title derived-title))))
-      (when address
-        (condition-case _err
-            (progn
-              (hyprland-jump address)
-              t)
-          (error nil))))))
+    (when-let* ((address (hyprland-zen--resolve-post-activate-address keyword1-addresses target-title)))
+      (condition-case _err
+          (progn
+            (hyprland-jump address)
+            t)
+        (error nil)))))
 
-(defun hyprland-zen--jump-to-cached-window (window-id &optional tab-title)
-  "Try jump by cached browser WINDOW-ID mapping, validating staleness."
-  (when (and hyprland-zen-jump-to-window-on-tab-switch
-             (fboundp 'hyprland-jump)
-             (stringp window-id)
-             (not (string-empty-p window-id)))
-    (when-let* ((address (gethash window-id hyprland-zen--browser-window->hyprland-address)))
-      (let ((clients (hyprland-zen--browser-clients)))
-        (when (hyprland-zen--cache-address-valid-p address tab-title clients)
-          (condition-case _err
-              (progn
-                (hyprland-jump address)
-                t)
-            (error nil)))))))
+(defun hyprland-zen--keyword1-addresses-for-window (window-id)
+  "Return pre-activate keyword1 candidate addresses for WINDOW-ID."
+  (when-let* ((tab (hyprland-zen--active-tab-for-window window-id))
+              (title (hyprland-zen--field tab 'title)))
+    (hyprland-zen--best-match-addresses-by-title title)))
 
-(defun hyprland-zen--jump-to-known-window (window-id &optional tab-title)
-  "Jump to mapped Hyprland window for browser WINDOW-ID.
+(defun hyprland-zen--post-activate-window-sync (_window-id tab-title keyword1-addresses)
+  "After activate-tab, resolve and jump using keyword matching."
+  (hyprland-zen--jump-to-known-window keyword1-addresses tab-title))
 
-Return non-nil when jump was dispatched."
-  (or (hyprland-zen--jump-to-cached-window window-id tab-title)
-      (hyprland-zen--jump-to-window-by-title tab-title window-id)))
-
-(defun hyprland-zen--post-activate-window-sync (window-id tab-title)
-  "After activate-tab, refresh mapping and perform explicit jump for WINDOW-ID."
-  (when (and hyprland-zen-jump-to-window-on-tab-switch
-             (stringp window-id)
-             (not (string-empty-p window-id)))
-    (hyprland-zen--remember-window-address window-id)
-    (hyprland-zen--jump-to-known-window window-id tab-title)
-    (hyprland-zen--schedule-window-address-refresh window-id)))
-
-(defun hyprland-zen--schedule-post-activate-window-sync (window-id tab-title)
+(defun hyprland-zen--schedule-post-activate-window-sync (window-id tab-title keyword1-addresses)
   "Schedule delayed post-activate sync for WINDOW-ID and TAB-TITLE."
   (when (and hyprland-zen-jump-to-window-on-tab-switch
              (stringp window-id)
@@ -373,7 +333,8 @@ Return non-nil when jump was dispatched."
                  nil
                  #'hyprland-zen--post-activate-window-sync
                  window-id
-                 tab-title)))
+                 tab-title
+                 keyword1-addresses)))
 
 (defun hyprland-zen--decode-image-data-url (data-url)
   "Decode DATA-URL image string into plist `(:bytes :type)'."
@@ -707,8 +668,7 @@ Return current workspace list (possibly empty)."
 (defun hyprland-zen--clear-store ()
   "Clear in-memory Zen stores."
   (clrhash hyprland-zen--tabs)
-  (clrhash hyprland-zen--workspaces)
-  (clrhash hyprland-zen--browser-window->hyprland-address))
+  (clrhash hyprland-zen--workspaces))
 
 (defun hyprland-zen--store-workspace (workspace)
   "Store WORKSPACE in memory after normalization."
@@ -852,9 +812,6 @@ Active tabs are sorted first, then by title."
        (when-let* ((tab (or (hyprland-zen--field message 'tab)
                             message))
                    (stored (hyprland-zen--store-tab tab)))
-         (when (hyprland-zen--truthy-p (hyprland-zen--field stored 'active))
-           (when-let* ((window-id (hyprland-zen--window-id stored)))
-             (hyprland-zen--schedule-window-address-refresh window-id)))
          (run-hooks 'hyprland-zen-after-refresh-hook)
          t))
       ((or "workspace-upsert" "workspace_upsert")
@@ -1314,6 +1271,7 @@ When TAB is nil, prompt from current registry."
          (key (hyprland-zen--tab-key target))
          (window-id (hyprland-zen--window-id target))
          (tab-title (hyprland-zen--string (hyprland-zen--field target 'title)))
+         (keyword1-addresses (hyprland-zen--keyword1-addresses-for-window window-id))
          (tab-id (hyprland-zen--string (hyprland-zen--field target 'tab_id)))
          (workspace-id (hyprland-zen--string (hyprland-zen--field target 'workspace_id)))
          (sync-group (hyprland-zen--string (hyprland-zen--field target 'sync_group)))
@@ -1329,7 +1287,8 @@ When TAB is nil, prompt from current registry."
         (user-error "Zen bridge is reconnecting; activate-tab aborted")))
     (hyprland-zen--send-with-queued-retry payload hyprland-zen-op-retry-timeout)
     (when window-id
-      (hyprland-zen--schedule-post-activate-window-sync window-id tab-title))
+      (hyprland-zen--schedule-post-activate-window-sync
+       window-id tab-title keyword1-addresses))
     key))
 
 (defun hyprland-zen-tab-close (&optional tab)
