@@ -138,6 +138,12 @@ chmod +x browser/native-host/hyprland-zen-native-host
 (hyprland-zen-refresh-workspaces)
 #+end_src
 
+Startup ownership model:
+
+- Emacs (~hyprland-zen-start~) starts line-stdio bridge server.
+- Browser extension starts native messaging adapter automatically.
+- Do NOT keep a manual terminal instance of ~hyprland-zen-native-host~ running during normal usage.
+
 Without native host wiring, extension can still be smoke-tested via Browser
 Toolbox logs (~[hyprland-zen-extension]~).
 
@@ -210,6 +216,7 @@ Important options:
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
 - ~hyprland-zen-bootstrap-retry-seconds~: startup warmup window for auto-retrying tab/workspace refresh
 - ~hyprland-zen-bootstrap-retry-interval~: retry interval during startup warmup
+- ~hyprland-zen-error-notify-throttle-seconds~: throttle identical Zen bridge error echo messages
 - ~hyprland-zen-trace-max-entries~: max in-memory bridge trace payload entries
 - ~hyprland-zen-preview-key~: Consult preview trigger for tab switch
 - ~hyprland-zen-jump-to-window-on-tab-switch~: best-effort Hyprland jump on tab activate
@@ -241,6 +248,15 @@ for a bounded warmup window. You can inspect progress with:
 
 - ~M-x hyprland-zen-status~ (check ~:bootstrap-retry-seconds-left~, ~:last-error-message~)
 - ~M-x hyprland-zen-doctor~ (one-shot readiness probe)
+
+If you see repeated ~browser-bridge-not-connected~ logs and many outgoing
+~{"op":"list-tabs"}~ lines, it means Emacs bridge is sending retries while the
+browser extension is still not connected to native messaging. Current code keeps
+bootstrap retries bounded and throttles repeated echo logs.
+
+If this still persists, check native host socket path details from
+~M-x hyprland-zen-trace-report~ (error messages include ~socket=...~) to detect
+runtime-dir path mismatch.
 
 ** Need real runtime data for debugging Zen issues
 

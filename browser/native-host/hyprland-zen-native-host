@@ -9,13 +9,56 @@ import sys
 import time
 
 
+def _socket_name() -> str:
+    return "hyprland-zen-bridge.sock"
+
+
+def _default_runtime_dir() -> str | None:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return runtime
+    guess = f"/run/user/{os.getuid()}"
+    if os.path.isdir(guess):
+        return guess
+    return None
+
+
+def _dedup_paths(paths: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in paths:
+        if not path:
+            continue
+        norm = os.path.abspath(path)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
+def resolve_socket_candidates() -> list[str]:
+    custom = os.environ.get("HYPRLAND_ZEN_SOCKET")
+    if custom:
+        return [os.path.abspath(custom)]
+    runtime_env = os.environ.get("XDG_RUNTIME_DIR")
+    runtime_default = f"/run/user/{os.getuid()}"
+    candidates = []
+    if runtime_env:
+        candidates.append(os.path.join(runtime_env, _socket_name()))
+    if os.path.isdir(runtime_default):
+        candidates.append(os.path.join(runtime_default, _socket_name()))
+    candidates.append(f"/tmp/hyprland-zen-bridge-{os.getuid()}.sock")
+    return _dedup_paths(candidates)
+
+
 def resolve_socket_path() -> str:
     custom = os.environ.get("HYPRLAND_ZEN_SOCKET")
     if custom:
-        return custom
-    runtime = os.environ.get("XDG_RUNTIME_DIR")
+        return os.path.abspath(custom)
+    runtime = _default_runtime_dir()
     if runtime:
-        return os.path.join(runtime, "hyprland-zen-bridge.sock")
+        return os.path.join(runtime, _socket_name())
     return f"/tmp/hyprland-zen-bridge-{os.getuid()}.sock"
 
 
@@ -41,7 +84,9 @@ class NativeAdapter:
         self.stdin_fd = sys.stdin.fileno()
         os.set_blocking(self.stdin_fd, False)
         self.selector.register(self.stdin_fd, selectors.EVENT_READ, "stdin")
-        self.socket_path = resolve_socket_path()
+        self.socket_paths = resolve_socket_candidates()
+        self.socket_path = self.socket_paths[0]
+        self.socket_path_index = 0
         self.sock: socket.socket | None = None
         self.last_connect_attempt = 0.0
         self.stdin_buffer = bytearray()
@@ -69,16 +114,27 @@ class NativeAdapter:
         if now - self.last_connect_attempt < 1.0:
             return
         self.last_connect_attempt = now
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.connect(self.socket_path)
-        except OSError:
-            sock.close()
+        if not self.socket_paths:
+            self.socket_paths = [resolve_socket_path()]
+        count = len(self.socket_paths)
+        start = self.socket_path_index % count
+        for offset in range(count):
+            idx = (start + offset) % count
+            path = self.socket_paths[idx]
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                sock.connect(path)
+            except OSError:
+                sock.close()
+                continue
+            sock.setblocking(False)
+            self.sock = sock
+            self.socket_path = path
+            self.socket_path_index = (idx + 1) % count
+            self.selector.register(sock, selectors.EVENT_READ, "socket")
+            self.flush_pending()
             return
-        sock.setblocking(False)
-        self.sock = sock
-        self.selector.register(sock, selectors.EVENT_READ, "socket")
-        self.flush_pending()
+        self.socket_path_index = (start + 1) % count
 
     def queue_line(self, line: bytes) -> None:
         self.pending_lines.append(line)
@@ -238,7 +294,7 @@ class LineBridgeServer:
                             emit_line({
                                 "type": "error",
                                 "op": str(payload.get("op", "")),
-                                "message": "browser-bridge-not-connected"
+                                "message": f"browser-bridge-not-connected (socket={self.socket_path})"
                             })
                             continue
                         try:
@@ -248,7 +304,7 @@ class LineBridgeServer:
                             emit_line({
                                 "type": "error",
                                 "op": str(payload.get("op", "")),
-                                "message": "browser-bridge-disconnected"
+                                "message": f"browser-bridge-disconnected (socket={self.socket_path})"
                             })
                     elif tag == "listener":
                         conn, _ = self.listener.accept()
@@ -294,6 +350,11 @@ class LineBridgeServer:
 def main() -> int:
     if "--line-stdio" in sys.argv[1:]:
         return LineBridgeServer().run()
+    if sys.stdin.isatty():
+        raise SystemExit(
+            "hyprland-zen-native-host: native adapter mode is launched by browser; "
+            "do not run manually in a terminal"
+        )
     return NativeAdapter().run()
 
 

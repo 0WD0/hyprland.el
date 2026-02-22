@@ -78,6 +78,11 @@ diagnosis in real environments."
   :type 'integer
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-error-notify-throttle-seconds 2.0
+  "Minimum seconds between identical runtime error echo messages."
+  :type 'number
+  :group 'hyprland-zen)
+
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
   "Zen tab store keyed by `browser/profile/tab_id'.")
 
@@ -97,6 +102,9 @@ diagnosis in real environments."
 
 (defvar hyprland-zen--trace nil
   "Recent bridge protocol entries (newest first).")
+
+(defvar hyprland-zen--last-error-notify-signature nil)
+(defvar hyprland-zen--last-error-notify-at nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -319,6 +327,8 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-preview-response-at nil
         hyprland-zen--last-error-message nil
         hyprland-zen--last-error-op nil
+        hyprland-zen--last-error-notify-signature nil
+        hyprland-zen--last-error-notify-at nil
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0)
@@ -345,6 +355,25 @@ ACTION and CAND follow Consult's :state contract."
   "Return non-nil when both tab and workspace stores are populated."
   (and (hyprland-zen-tabs)
        (hyprland-zen-workspaces)))
+
+(defun hyprland-zen--bootstrap-active-p ()
+  "Return non-nil when bootstrap retry window is currently active."
+  (and hyprland-zen--bootstrap-deadline
+       (> hyprland-zen--bootstrap-deadline (hyprland-zen--now))))
+
+(defun hyprland-zen--notify-error (op err-message)
+  "Echo runtime error for OP and ERR-MESSAGE with throttling."
+  (let* ((signature (format "%s|%s" op err-message))
+         (now (hyprland-zen--now))
+         (should-echo
+          (or (not (equal signature hyprland-zen--last-error-notify-signature))
+              (not hyprland-zen--last-error-notify-at)
+              (>= (- now hyprland-zen--last-error-notify-at)
+                  (max 0.0 hyprland-zen-error-notify-throttle-seconds)))))
+    (when should-echo
+      (setq hyprland-zen--last-error-notify-signature signature
+            hyprland-zen--last-error-notify-at now)
+      (message "hyprland-zen error (%s): %s" op err-message))))
 
 (defun hyprland-zen--bootstrap-retry-tick ()
   "Retry tab/workspace refresh during startup warmup window."
@@ -694,12 +723,12 @@ Active tabs are sorted first, then by title."
        (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
          (when (or (string-match-p "browser-bridge-not-connected" reason)
                    (string-match-p "browser-bridge-disconnected" reason))
-           (hyprland-zen--schedule-retry-refresh)
-           (hyprland-zen--start-bootstrap-retry)))
+           (unless (hyprland-zen--bootstrap-active-p)
+             (hyprland-zen--start-bootstrap-retry))))
        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
          (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces" "capture-tab"))
-           (message "hyprland-zen error (%s): %s" op err-message)))
+           (hyprland-zen--notify-error op err-message)))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
