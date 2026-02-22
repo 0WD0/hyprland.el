@@ -276,7 +276,44 @@ Collect bridge traffic from your real session (recommended before reporting bugs
 You can also run the live smoke script in your real environment:
 
 #+begin_src bash
-emacs -Q --batch -L . -l hyprland.el -l scripts/hyprland-zen-live-smoke-test.el
+eask emacs --batch -Q -l hyprland.el -l scripts/hyprland-zen-live-smoke-test.el
+#+end_src
+
+** Zen automated test harness
+
+For repeatable troubleshooting, this repo now includes:
+
+- ~scripts/hyprland-zen-test.sh~ (unit + doctor + optional live smoke orchestrator)
+- ~scripts/hyprland-zen-check.el~ (batch doctor with actionable bridge hints)
+
+Run deterministic unit tests only:
+
+#+begin_src bash
+bash scripts/hyprland-zen-test.sh unit
+#+end_src
+
+Run non-interactive runtime diagnosis (returns non-zero when bridge is not ready):
+
+#+begin_src bash
+bash scripts/hyprland-zen-test.sh doctor
+#+end_src
+
+Run full live path (requires native host + loaded Zen extension):
+
+#+begin_src bash
+bash scripts/hyprland-zen-test.sh live
+#+end_src
+
+Run everything in one command:
+
+#+begin_src bash
+bash scripts/hyprland-zen-test.sh all
+#+end_src
+
+Optional timeout override for doctor:
+
+#+begin_src bash
+HYPRLAND_ZEN_CHECK_TIMEOUT=10 bash scripts/hyprland-zen-test.sh doctor
 #+end_src
 
 ** Consult state arity error
