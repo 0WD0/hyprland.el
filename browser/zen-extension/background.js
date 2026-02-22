@@ -222,10 +222,9 @@ async function shrinkPreviewDataUrl(dataUrl) {
 
 async function activateWorkspaceByKey(key) {
   const rawKey = String(key || "");
-  const workspacePart = rawKey.split("/").length >= 3
+  const normalizedKey = rawKey.split("/").length >= 3
     ? rawKey.split("/").slice(2).join("/")
     : rawKey;
-  const normalizedKey = workspacePart.split("|container:")[0];
   const tabs = await browser.tabs.query({});
   const target = tabs.find((tab) => workspaceKey(tab) === normalizedKey && !tab.discarded) ||
     tabs.find((tab) => workspaceKey(tab) === normalizedKey);

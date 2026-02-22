@@ -152,9 +152,8 @@
       (should (equal seen "Focused Tab")))))
 
 (ert-deftest hyprland-zen-test-workspace-friendly-name/derives-window-label ()
-  (should (equal (hyprland-zen--workspace-friendly-name "win:7|container:default") "Window 7"))
-  (should (equal (hyprland-zen--workspace-friendly-name "win:7|container:work") "Window 7 (work)"))
-  (should (equal (hyprland-zen--workspace-friendly-name "win:9") "Window 9")))
+  (should (equal (hyprland-zen--workspace-friendly-name "win:9") "Window 9"))
+  (should (equal (hyprland-zen--workspace-friendly-name "custom") "custom")))
 
 (ert-deftest hyprland-zen-test-post-activate-window-sync/uses-two-keyword-strategy ()
   (let (events)

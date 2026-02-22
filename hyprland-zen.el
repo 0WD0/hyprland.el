@@ -186,11 +186,9 @@ diagnosis in real environments."
 
 (defun hyprland-zen--window-id (tab)
   "Return normalized browser window id string from TAB payload."
-  (let ((value (or (hyprland-zen--field tab 'window_id)
-                   (hyprland-zen--field tab 'windowId))))
-    (let ((out (hyprland-zen--string value)))
-      (unless (string-empty-p out)
-        out))))
+  (let ((out (hyprland-zen--string (hyprland-zen--field tab 'window_id))))
+    (unless (string-empty-p out)
+      out)))
 
 (defun hyprland-zen--browser-class-p (class)
   "Return non-nil when CLASS looks like configured browser class."
@@ -588,38 +586,19 @@ Return current workspace list (possibly empty)."
 
 (defun hyprland-zen--workspace-id-from-tab (tab)
   "Extract workspace id from TAB payload."
-  (let* ((workspace (hyprland-zen--field tab 'workspace))
-         (raw (or (hyprland-zen--field tab 'workspace_id)
-                  (hyprland-zen--field tab 'workspaceId)
-                  (when (listp workspace)
-                    (or (hyprland-zen--field workspace 'id)
-                        (hyprland-zen--field workspace 'workspace_id)))
-                  (unless (listp workspace) workspace))))
-    (hyprland-zen--string raw "default")))
+  (hyprland-zen--string (hyprland-zen--field tab 'workspace_id) "default"))
 
 (defun hyprland-zen--workspace-friendly-name (workspace-id)
   "Return user-facing workspace name derived from WORKSPACE-ID when possible."
   (let ((raw (hyprland-zen--string workspace-id)))
     (cond
-     ((string-match "\\`win:\\([^|]+\\)|container:\\(.+\\)\\'" raw)
-      (let ((wid (hyprland-zen--string (match-string 1 raw)))
-            (container (hyprland-zen--string (match-string 2 raw))))
-        (if (or (string-empty-p container) (string= container "default"))
-            (format "Window %s" wid)
-          (format "Window %s (%s)" wid container))))
      ((string-match "\\`win:\\(.+\\)\\'" raw)
       (format "Window %s" (hyprland-zen--string (match-string 1 raw))))
      (t raw))))
 
 (defun hyprland-zen--workspace-name-from-tab (tab)
   "Extract workspace display name from TAB payload."
-  (let* ((workspace (hyprland-zen--field tab 'workspace))
-         (raw (or (hyprland-zen--field tab 'workspace_name)
-                  (hyprland-zen--field tab 'workspaceName)
-                  (when (listp workspace)
-                    (or (hyprland-zen--field workspace 'name)
-                        (hyprland-zen--field workspace 'title)
-                        (hyprland-zen--field workspace 'workspace_name)))))
+  (let* ((raw (hyprland-zen--field tab 'workspace_name))
          (workspace-id (hyprland-zen--workspace-id-from-tab tab))
          (name (hyprland-zen--string raw)))
     (if (string-empty-p name)
@@ -632,10 +611,7 @@ Return current workspace list (possibly empty)."
          (profile (hyprland-zen--string (hyprland-zen--field workspace 'profile) "default"))
          (workspace-id
           (hyprland-zen--string
-           (or (hyprland-zen--field workspace 'workspace_id)
-               (hyprland-zen--field workspace 'workspaceId)
-               (hyprland-zen--field workspace 'id)
-               (hyprland-zen--field workspace 'workspace))
+           (hyprland-zen--field workspace 'workspace_id)
            "default"))
          (name
           (hyprland-zen--string
@@ -667,9 +643,7 @@ Return current workspace list (possibly empty)."
          (browser (hyprland-zen--string (hyprland-zen--field tab 'browser) "zen"))
          (profile (hyprland-zen--string (hyprland-zen--field tab 'profile) "default"))
          (window-id (hyprland-zen--string (hyprland-zen--window-id tab)))
-         (cookie-store (hyprland-zen--string (or (hyprland-zen--field tab 'cookie_store_id)
-                                                 (hyprland-zen--field tab 'cookieStoreId))
-                                             "default"))
+         (cookie-store (hyprland-zen--string (hyprland-zen--field tab 'cookie_store_id) "default"))
          (sync-group (hyprland-zen--string (hyprland-zen--field tab 'sync_group)
                                            (format "container:%s" cookie-store)))
          (workspace-id (hyprland-zen--workspace-id-from-tab tab))
@@ -796,24 +770,15 @@ Active tabs are sorted first, then by title."
 
 (defun hyprland-zen--message-type (message)
   "Return normalized type string from MESSAGE alist."
-  (downcase
-   (hyprland-zen--string
-    (or (hyprland-zen--field message 'type)
-        (hyprland-zen--field message 'event)))))
+  (downcase (hyprland-zen--string (hyprland-zen--field message 'type))))
 
 (defun hyprland-zen--remove-message-key (message)
   "Extract tab key from MESSAGE remove payload."
-  (or (hyprland-zen--field message 'key)
-      (when-let* ((tab (hyprland-zen--field message 'tab)))
-        (hyprland-zen--tab-key tab))
-      (hyprland-zen--tab-key message)))
+  (hyprland-zen--field message 'key))
 
 (defun hyprland-zen--remove-workspace-key (message)
   "Extract workspace key from MESSAGE remove payload."
-  (or (hyprland-zen--field message 'key)
-      (when-let* ((workspace (hyprland-zen--field message 'workspace)))
-        (hyprland-zen--workspace-key workspace))
-      (hyprland-zen--workspace-key message)))
+  (hyprland-zen--field message 'key))
 
 (defun hyprland-zen--apply-message (message)
   "Apply parsed host MESSAGE to in-memory state."
@@ -833,7 +798,7 @@ Active tabs are sorted first, then by title."
          (hyprland-zen--store-tab tab))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
-      ((or "workspace-snapshot" "workspace_snapshot")
+      ("workspace_snapshot"
        (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
        (setq hyprland-zen--bridge-connected t)
        (hyprland-zen--clear-bridge-disconnect-error)
@@ -848,13 +813,13 @@ Active tabs are sorted first, then by title."
                    (stored (hyprland-zen--store-tab tab)))
          (run-hooks 'hyprland-zen-after-refresh-hook)
          t))
-      ((or "workspace-upsert" "workspace_upsert")
+      ("workspace-upsert"
        (when-let* ((workspace (or (hyprland-zen--field message 'workspace)
                                   message)))
          (hyprland-zen--store-workspace workspace)
          (run-hooks 'hyprland-zen-after-refresh-hook)
          t))
-      ((or "bridge-state" "bridge_state")
+      ("bridge-state"
        (setq hyprland-zen--bridge-connected
              (hyprland-zen--truthy-p (hyprland-zen--field message 'connected))
              hyprland-zen--bridge-last-reason
@@ -895,7 +860,7 @@ Active tabs are sorted first, then by title."
          (hyprland-zen--remove-tab-by-key key)
          (run-hooks 'hyprland-zen-after-refresh-hook)
          t))
-      ((or "workspace-remove" "workspace_remove")
+      ("workspace-remove"
        (when-let* ((key (hyprland-zen--remove-workspace-key message)))
          (remhash key hyprland-zen--workspaces)
          (run-hooks 'hyprland-zen-after-refresh-hook)
