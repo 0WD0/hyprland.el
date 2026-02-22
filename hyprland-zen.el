@@ -92,7 +92,7 @@ reduces noise while preserving actionable failures."
   :type '(repeat string)
   :group 'hyprland-zen)
 
-(defcustom hyprland-zen-native-host-auto-restart t
+(defcustom hyprland-zen-native-host-auto-restart nil
   "When non-nil, auto-restart stale native adapter on repeated bridge disconnects."
   :type 'boolean
   :group 'hyprland-zen)
@@ -104,6 +104,11 @@ reduces noise while preserving actionable failures."
 
 (defcustom hyprland-zen-native-host-restart-cooldown 20.0
   "Minimum seconds between automatic native adapter restart attempts."
+  :type 'number
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-native-host-restart-stall-seconds 12.0
+  "Require bridge to be stalled this many seconds before auto-restart."
   :type 'number
   :group 'hyprland-zen)
 
@@ -413,6 +418,16 @@ ACTION and CAND follow Consult's :state contract."
        (or (string-match-p "browser-bridge-not-connected" message)
            (string-match-p "browser-bridge-disconnected" message))))
 
+(defun hyprland-zen--bridge-stalled-p ()
+  "Return non-nil when bridge has remained disconnected beyond warmup window."
+  (and (not hyprland-zen--bridge-connected)
+       (let ((stall (max 0.0 hyprland-zen-native-host-restart-stall-seconds))
+             (since-tabs (hyprland-zen--seconds-since hyprland-zen--last-snapshot-at))
+             (since-workspaces (hyprland-zen--seconds-since hyprland-zen--last-workspace-snapshot-at)))
+         (or (null hyprland-zen--last-snapshot-at)
+             (and since-tabs (>= since-tabs stall))
+             (and since-workspaces (>= since-workspaces stall))))))
+
 (defun hyprland-zen--clear-bridge-disconnect-error ()
   "Clear stale disconnect diagnostics when bridge has recovered."
   (when (and (stringp hyprland-zen--last-error-message)
@@ -426,6 +441,7 @@ ACTION and CAND follow Consult's :state contract."
   (when (and hyprland-zen-native-host-auto-restart
              (>= hyprland-zen--bridge-not-connected-streak
                  (max 1 hyprland-zen-native-host-restart-threshold))
+             (hyprland-zen--bridge-stalled-p)
              (executable-find "pkill")
              (> (length (string-trim hyprland-zen-native-host-pkill-pattern)) 0)
              (let ((last (or hyprland-zen--last-native-host-restart-at 0.0)))
@@ -891,11 +907,7 @@ Active tabs are sorted first, then by title."
            (setq hyprland-zen--bridge-connected nil)
            (when (member op-name '("list-tabs" "list-workspaces"))
              (hyprland-zen--schedule-retry-refresh))
-           (if (member op-name '("open-url" "capture-tab" "activate-tab" "activate-workspace"))
-               (setq hyprland-zen--bridge-not-connected-streak
-                     (max hyprland-zen--bridge-not-connected-streak
-                          (max 1 hyprland-zen-native-host-restart-threshold)))
-             (cl-incf hyprland-zen--bridge-not-connected-streak))
+           (cl-incf hyprland-zen--bridge-not-connected-streak)
            (unless (hyprland-zen--bootstrap-active-p)
              (hyprland-zen--start-bootstrap-retry))
            (hyprland-zen--maybe-restart-native-host reason)))

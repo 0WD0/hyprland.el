@@ -18,6 +18,8 @@
 (defvar hyprland-consult--preview-buffer-name " *hyprland-preview*")
 (defvar hyprland-consult--preview-window nil)
 (defvar hyprland-consult--preview-restore nil)
+(defvar hyprland-consult--failed-image-fingerprints (make-hash-table :test #'equal)
+  "Cache of image payload hashes that previously failed to render.")
 
 (defcustom hyprland-consult-preview-key '(:debounce 0.12 any)
   "Preview trigger configuration passed to `consult--read'.
@@ -67,6 +69,11 @@ Examples:
     ('jpeg (hyprland-consult--bytes-prefix-p bytes '(255 216 255)))
     (_ nil)))
 
+(defun hyprland-consult--image-fingerprint (bytes image-type)
+  "Build stable fingerprint string for BYTES and IMAGE-TYPE."
+  (when (and (stringp bytes) (symbolp image-type))
+    (format "%s:%s" image-type (secure-hash 'sha1 bytes))))
+
 (defun hyprland-consult--candidates ()
   "Build completion alist `(DISPLAY . WINDOW)' for selection.
 
@@ -88,19 +95,24 @@ return action both receive the same structured value."
         ('t
          (let* ((bytes (or (plist-get payload :image-bytes)
                            (plist-get payload :png-bytes)))
-                (image-type (or (plist-get payload :image-type) 'png)))
-           (condition-case err
-               (if (and bytes
-                        (display-images-p)
-                        (image-type-available-p image-type)
-                        (hyprland-consult--valid-image-bytes-p bytes image-type))
-                   (progn
-                     (set-buffer-multibyte nil)
-                     (insert-image (create-image bytes image-type t :scale 0.45))
-                     (insert "\n"))
-                 (insert "Preview image unavailable in current Emacs display\n"))
-             (error
-              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
+                (image-type (or (plist-get payload :image-type) 'png))
+                (fingerprint (hyprland-consult--image-fingerprint bytes image-type)))
+            (condition-case err
+                (if (and bytes
+                         (display-images-p)
+                         (image-type-available-p image-type)
+                         (hyprland-consult--valid-image-bytes-p bytes image-type)
+                         (not (and fingerprint
+                                   (gethash fingerprint hyprland-consult--failed-image-fingerprints))))
+                    (progn
+                      (set-buffer-multibyte nil)
+                      (insert-image (create-image bytes image-type t :scale 0.45))
+                      (insert "\n"))
+                  (insert "Preview image unavailable in current Emacs display\n"))
+              (error
+               (when fingerprint
+                 (puthash fingerprint t hyprland-consult--failed-image-fingerprints))
+               (insert (format "Preview render error: %s\n" (error-message-string err)))))))
         (_
          (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
       (setq buffer-read-only t))
@@ -173,6 +185,7 @@ return action both receive the same structured value."
         (quit-window nil win)))
     (setq hyprland-consult--preview-window nil
           hyprland-consult--preview-restore nil)
+    (clrhash hyprland-consult--failed-image-fingerprints)
     (kill-buffer buf)))
 
 (defun hyprland-consult--state (action cand)
