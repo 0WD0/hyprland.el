@@ -131,6 +131,12 @@ diagnosis in real environments."
 (defvar hyprland-zen--queued-event-serial 0)
 (defvar hyprland-zen--messages-in 0)
 (defvar hyprland-zen--messages-out 0)
+(defvar hyprland-zen--last-keyword1-title nil)
+(defvar hyprland-zen--last-keyword1-addresses nil)
+(defvar hyprland-zen--last-keyword2-title nil)
+(defvar hyprland-zen--last-keyword2-addresses nil)
+(defvar hyprland-zen--last-jump-address nil)
+(defvar hyprland-zen--last-jump-strategy nil)
 
 (defvar hyprland-zen-after-refresh-hook nil
   "Hook run after Zen tab store changes.")
@@ -308,16 +314,26 @@ TARGET-TITLE provides post-activate title matching candidates."
   (let* ((clients (hyprland-zen--browser-clients))
          (k1 (cl-delete-duplicates (copy-sequence (or keyword1-addresses nil)) :test #'string=))
          (k2 (hyprland-zen--best-match-addresses-by-title target-title clients)))
+    (setq hyprland-zen--last-keyword2-title (hyprland-zen--string target-title)
+          hyprland-zen--last-keyword2-addresses (copy-sequence (or k2 nil))
+          hyprland-zen--last-jump-address nil
+          hyprland-zen--last-jump-strategy nil)
     (cond
      ((= (length k1) 1)
       (let ((only (car k1)))
         (when (hyprland-zen--address-present-p only clients)
+          (setq hyprland-zen--last-jump-address only
+                hyprland-zen--last-jump-strategy 'keyword1-unique)
           only)))
      ((> (length k1) 1)
       (let ((hits (hyprland-zen--address-intersection k1 k2)))
         (when (= (length hits) 1)
+          (setq hyprland-zen--last-jump-address (car hits)
+                hyprland-zen--last-jump-strategy 'keyword1-keyword2-intersection)
           (car hits))))
      ((= (length k2) 1)
+      (setq hyprland-zen--last-jump-address (car k2)
+            hyprland-zen--last-jump-strategy 'keyword2-unique)
       (car k2))
      (t nil))))
 
@@ -338,19 +354,24 @@ title used as keyword2."
 
 (defun hyprland-zen--keyword1-addresses-for-window (window-id &optional target-tab-id)
   "Return pre-activate keyword1 candidate addresses for WINDOW-ID."
-  (let (title)
-    (unless (hyprland-zen--active-tab-for-window window-id)
-      (when (hyprland-zen-running-p)
-        (ignore-errors
-          (hyprland-zen-refresh)
-          (hyprland-zen--wait-for-tabs 0.35))))
-    (setq title
-          (or (when-let* ((tab (hyprland-zen--active-tab-for-window window-id)))
-                (hyprland-zen--field tab 'title))
-              (when-let* ((tab (hyprland-zen--tab-in-window window-id target-tab-id)))
-                (hyprland-zen--field tab 'title))
-              (hyprland-zen--active-hyprland-window-title)))
-    (hyprland-zen--best-match-addresses-by-title title)))
+  (let (title matches)
+    (setq title (hyprland-zen--active-hyprland-window-title)
+          matches (hyprland-zen--best-match-addresses-by-title title))
+    (unless matches
+      (unless (hyprland-zen--active-tab-for-window window-id)
+        (when (hyprland-zen-running-p)
+          (ignore-errors
+            (hyprland-zen-refresh)
+            (hyprland-zen--wait-for-tabs 0.35))))
+      (setq title
+            (or (when-let* ((tab (hyprland-zen--active-tab-for-window window-id)))
+                  (hyprland-zen--field tab 'title))
+                (when-let* ((tab (hyprland-zen--tab-in-window window-id target-tab-id)))
+                  (hyprland-zen--field tab 'title)))
+            matches (hyprland-zen--best-match-addresses-by-title title)))
+    (setq hyprland-zen--last-keyword1-title (hyprland-zen--string title)
+          hyprland-zen--last-keyword1-addresses (copy-sequence (or matches nil)))
+    matches))
 
 (defun hyprland-zen--post-activate-window-sync (_window-id tab-title keyword1-addresses)
   "After activate-tab, resolve and jump using keyword matching."
@@ -520,6 +541,12 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--queued-op-count 0
         hyprland-zen--last-queued-op nil
         hyprland-zen--queued-event-serial 0
+        hyprland-zen--last-keyword1-title nil
+        hyprland-zen--last-keyword1-addresses nil
+        hyprland-zen--last-keyword2-title nil
+        hyprland-zen--last-keyword2-addresses nil
+        hyprland-zen--last-jump-address nil
+        hyprland-zen--last-jump-strategy nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0)
   (setq hyprland-zen--trace nil))
@@ -1083,6 +1110,12 @@ When called interactively, print a short status line in echo area."
                 :bridge-last-reason hyprland-zen--bridge-last-reason
                 :queued-op-count hyprland-zen--queued-op-count
                 :last-queued-op hyprland-zen--last-queued-op
+                :last-keyword1-title hyprland-zen--last-keyword1-title
+                :last-keyword1-addresses hyprland-zen--last-keyword1-addresses
+                :last-keyword2-title hyprland-zen--last-keyword2-title
+                :last-keyword2-addresses hyprland-zen--last-keyword2-addresses
+                :last-jump-address hyprland-zen--last-jump-address
+                :last-jump-strategy hyprland-zen--last-jump-strategy
                 :last-error-op hyprland-zen--last-error-op
                 :last-error-message hyprland-zen--last-error-message
                 :last-sentinel-event hyprland-zen--last-sentinel-event)))
