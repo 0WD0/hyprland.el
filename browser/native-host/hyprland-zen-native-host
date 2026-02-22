@@ -78,6 +78,17 @@ def emit_line(payload: dict) -> None:
     sys.stdout.flush()
 
 
+def socket_accepts_connections(path: str) -> bool:
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 class NativeAdapter:
     def __init__(self) -> None:
         self.selector = selectors.DefaultSelector()
@@ -259,18 +270,12 @@ class LineBridgeServer:
         if parent:
             os.makedirs(parent, exist_ok=True)
         if os.path.exists(path):
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                probe.connect(path)
-            except OSError:
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-            else:
+            if socket_accepts_connections(path):
                 raise SystemExit(f"hyprland-zen-native-host already running at {path}")
-            finally:
-                probe.close()
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(path)
         listener.listen(1)
@@ -281,12 +286,14 @@ class LineBridgeServer:
         if self.bridge_connected == connected:
             return
         self.bridge_connected = connected
-        emit_line({
-            "type": "bridge-state",
-            "connected": connected,
-            "reason": reason,
-            "socket": self.socket_path,
-        })
+        emit_line(
+            {
+                "type": "bridge-state",
+                "connected": connected,
+                "reason": reason,
+                "socket": self.socket_path,
+            }
+        )
 
     def queue_op(self, payload: dict) -> int:
         now = time.monotonic()
@@ -345,39 +352,47 @@ class LineBridgeServer:
                         try:
                             payload = json.loads(line)
                         except json.JSONDecodeError as err:
-                            emit_line({"type": "error", "op": "decode", "message": str(err)})
+                            emit_line(
+                                {"type": "error", "op": "decode", "message": str(err)}
+                            )
                             continue
                         if self.browser_conn is None:
                             qlen = self.queue_op(payload)
-                            emit_line({
-                                "type": "queued",
-                                "op": str(payload.get("op", "")),
-                                "message": f"browser-bridge-not-connected (socket={self.socket_path})",
-                                "queued": True,
-                                "queue_length": qlen,
-                                "socket": self.socket_path,
-                            })
+                            emit_line(
+                                {
+                                    "type": "queued",
+                                    "op": str(payload.get("op", "")),
+                                    "message": f"browser-bridge-not-connected (socket={self.socket_path})",
+                                    "queued": True,
+                                    "queue_length": qlen,
+                                    "socket": self.socket_path,
+                                }
+                            )
                             continue
                         try:
                             self.browser_conn.sendall(encode_json_line(payload))
                         except OSError:
                             qlen = self.queue_op(payload)
                             self.close_connection("browser-send-failed")
-                            emit_line({
-                                "type": "queued",
-                                "op": str(payload.get("op", "")),
-                                "message": f"browser-bridge-disconnected (socket={self.socket_path})",
-                                "queued": True,
-                                "queue_length": qlen,
-                                "socket": self.socket_path,
-                            })
+                            emit_line(
+                                {
+                                    "type": "queued",
+                                    "op": str(payload.get("op", "")),
+                                    "message": f"browser-bridge-disconnected (socket={self.socket_path})",
+                                    "queued": True,
+                                    "queue_length": qlen,
+                                    "socket": self.socket_path,
+                                }
+                            )
                     elif tag == "listener":
                         conn, _ = self.listener.accept()
                         conn.setblocking(False)
                         self.close_connection("browser-replaced")
                         self.browser_conn = conn
                         self.browser_buffer = ""
-                        self.selector.register(self.browser_conn, selectors.EVENT_READ, "browser")
+                        self.selector.register(
+                            self.browser_conn, selectors.EVENT_READ, "browser"
+                        )
                         self.emit_bridge_state(True, "browser-connected")
                         self.flush_pending_ops()
                     elif tag == "browser":
@@ -391,14 +406,22 @@ class LineBridgeServer:
                             continue
                         self.browser_buffer += data.decode("utf-8", errors="replace")
                         while "\n" in self.browser_buffer:
-                            raw_line, self.browser_buffer = self.browser_buffer.split("\n", 1)
+                            raw_line, self.browser_buffer = self.browser_buffer.split(
+                                "\n", 1
+                            )
                             raw_line = raw_line.strip()
                             if not raw_line:
                                 continue
                             try:
                                 payload = json.loads(raw_line)
                             except json.JSONDecodeError as err:
-                                emit_line({"type": "error", "op": "decode", "message": str(err)})
+                                emit_line(
+                                    {
+                                        "type": "error",
+                                        "op": "decode",
+                                        "message": str(err),
+                                    }
+                                )
                                 continue
                             emit_line(payload)
         finally:
