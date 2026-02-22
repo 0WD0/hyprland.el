@@ -143,7 +143,7 @@ class NativeAdapter:
             except OSError:
                 sock.close()
                 continue
-            sock.setblocking(False)
+            sock.setblocking(True)
             self.sock = sock
             self.socket_path = path
             self.socket_path_index = (idx + 1) % count
@@ -292,6 +292,7 @@ class LineBridgeServer:
         self.browser_conn: socket.socket | None = None
         self.browser_buffer = bytearray()
         self.bridge_connected = False
+        self.pending_lines: list[bytes] = []
         self.emit_bridge_state(False, "browser-bridge-not-connected")
 
     def emit_bridge_state(self, connected: bool, reason: str) -> None:
@@ -309,10 +310,27 @@ class LineBridgeServer:
             {
                 "type": "queued",
                 "op": op,
-                "queue_length": 0,
+                "queue_length": len(self.pending_lines),
                 "message": reason,
             }
         )
+
+    def queue_line(self, payload: dict) -> None:
+        self.pending_lines.append(encode_json_line(payload))
+        if len(self.pending_lines) > MAX_PENDING_LINES:
+            self.pending_lines = self.pending_lines[-MAX_PENDING_LINES:]
+
+    def flush_pending(self) -> None:
+        if self.browser_conn is None:
+            return
+        while self.pending_lines:
+            try:
+                self.browser_conn.sendall(self.pending_lines[0])
+            except OSError:
+                self.close_connection()
+                self.emit_bridge_state(False, "browser-bridge-disconnected")
+                return
+            self.pending_lines.pop(0)
 
     def bind_listener(self, path: str) -> socket.socket:
         parent = os.path.dirname(path)
@@ -366,14 +384,8 @@ class LineBridgeServer:
                             continue
                         if self.browser_conn is None:
                             reason = f"browser-bridge-not-connected (socket={self.socket_path})"
+                            self.queue_line(payload)
                             self.emit_queued(str(payload.get("op", "")), reason)
-                            emit_line(
-                                {
-                                    "type": "error",
-                                    "op": str(payload.get("op", "")),
-                                    "message": reason,
-                                }
-                            )
                             continue
                         try:
                             self.browser_conn.sendall(encode_json_line(payload))
@@ -381,17 +393,11 @@ class LineBridgeServer:
                             self.close_connection()
                             reason = f"browser-bridge-disconnected (socket={self.socket_path})"
                             self.emit_bridge_state(False, reason)
+                            self.queue_line(payload)
                             self.emit_queued(str(payload.get("op", "")), reason)
-                            emit_line(
-                                {
-                                    "type": "error",
-                                    "op": str(payload.get("op", "")),
-                                    "message": reason,
-                                }
-                            )
                     elif tag == "listener":
                         conn, _ = self.listener.accept()
-                        conn.setblocking(False)
+                        conn.setblocking(True)
                         self.close_connection()
                         self.browser_conn = conn
                         self.browser_buffer = bytearray()
@@ -399,6 +405,7 @@ class LineBridgeServer:
                             self.browser_conn, selectors.EVENT_READ, "browser"
                         )
                         self.emit_bridge_state(True, "browser-bridge-connected")
+                        self.flush_pending()
                     elif tag == "browser":
                         assert self.browser_conn is not None
                         try:
@@ -430,6 +437,7 @@ class LineBridgeServer:
                                 )
                                 continue
                             emit_line(payload)
+                self.flush_pending()
         finally:
             self.close_connection()
             try:
