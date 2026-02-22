@@ -260,10 +260,6 @@ class LineBridgeServer:
         self.selector.register(self.listener, selectors.EVENT_READ, "listener")
         self.browser_conn: socket.socket | None = None
         self.browser_buffer = ""
-        self.bridge_connected = False
-        self.pending_ops: list[tuple[float, dict]] = []
-        self.pending_max = 64
-        self.pending_ttl_seconds = 8.0
 
     def bind_listener(self, path: str) -> socket.socket:
         parent = os.path.dirname(path)
@@ -282,46 +278,7 @@ class LineBridgeServer:
         listener.setblocking(False)
         return listener
 
-    def emit_bridge_state(self, connected: bool, reason: str) -> None:
-        if self.bridge_connected == connected:
-            return
-        self.bridge_connected = connected
-        emit_line(
-            {
-                "type": "bridge-state",
-                "connected": connected,
-                "reason": reason,
-                "socket": self.socket_path,
-            }
-        )
-
-    def queue_op(self, payload: dict) -> int:
-        now = time.monotonic()
-        self.pending_ops.append((now, payload))
-        if len(self.pending_ops) > self.pending_max:
-            self.pending_ops = self.pending_ops[-self.pending_max :]
-        return len(self.pending_ops)
-
-    def prune_pending_ops(self) -> None:
-        if not self.pending_ops:
-            return
-        cutoff = time.monotonic() - self.pending_ttl_seconds
-        self.pending_ops = [item for item in self.pending_ops if item[0] >= cutoff]
-
-    def flush_pending_ops(self) -> None:
-        if self.browser_conn is None:
-            return
-        self.prune_pending_ops()
-        while self.pending_ops:
-            _, payload = self.pending_ops[0]
-            try:
-                self.browser_conn.sendall(encode_json_line(payload))
-            except OSError:
-                self.close_connection("browser-send-failed")
-                return
-            self.pending_ops.pop(0)
-
-    def close_connection(self, reason: str = "browser-disconnected") -> None:
+    def close_connection(self) -> None:
         if self.browser_conn is None:
             return
         try:
@@ -334,11 +291,9 @@ class LineBridgeServer:
             pass
         self.browser_conn = None
         self.browser_buffer = ""
-        self.emit_bridge_state(False, reason)
 
     def run(self) -> int:
         try:
-            self.emit_bridge_state(False, "startup")
             while True:
                 for key, _ in self.selector.select(timeout=0.5):
                     tag = key.data
@@ -357,44 +312,34 @@ class LineBridgeServer:
                             )
                             continue
                         if self.browser_conn is None:
-                            qlen = self.queue_op(payload)
                             emit_line(
                                 {
-                                    "type": "queued",
+                                    "type": "error",
                                     "op": str(payload.get("op", "")),
                                     "message": f"browser-bridge-not-connected (socket={self.socket_path})",
-                                    "queued": True,
-                                    "queue_length": qlen,
-                                    "socket": self.socket_path,
                                 }
                             )
                             continue
                         try:
                             self.browser_conn.sendall(encode_json_line(payload))
                         except OSError:
-                            qlen = self.queue_op(payload)
-                            self.close_connection("browser-send-failed")
+                            self.close_connection()
                             emit_line(
                                 {
-                                    "type": "queued",
+                                    "type": "error",
                                     "op": str(payload.get("op", "")),
                                     "message": f"browser-bridge-disconnected (socket={self.socket_path})",
-                                    "queued": True,
-                                    "queue_length": qlen,
-                                    "socket": self.socket_path,
                                 }
                             )
                     elif tag == "listener":
                         conn, _ = self.listener.accept()
                         conn.setblocking(False)
-                        self.close_connection("browser-replaced")
+                        self.close_connection()
                         self.browser_conn = conn
                         self.browser_buffer = ""
                         self.selector.register(
                             self.browser_conn, selectors.EVENT_READ, "browser"
                         )
-                        self.emit_bridge_state(True, "browser-connected")
-                        self.flush_pending_ops()
                     elif tag == "browser":
                         assert self.browser_conn is not None
                         try:
@@ -402,7 +347,7 @@ class LineBridgeServer:
                         except OSError:
                             data = b""
                         if not data:
-                            self.close_connection("browser-eof")
+                            self.close_connection()
                             continue
                         self.browser_buffer += data.decode("utf-8", errors="replace")
                         while "\n" in self.browser_buffer:
@@ -425,7 +370,7 @@ class LineBridgeServer:
                                 continue
                             emit_line(payload)
         finally:
-            self.close_connection("shutdown")
+            self.close_connection()
             try:
                 self.selector.unregister(self.listener)
             except Exception:

@@ -66,6 +66,33 @@ Prefer active + capturable URL, then any capturable, then active, then first."
                   tabs)
       (car tabs)))
 
+(defun hyprland-zen-live-smoke--active-tab (&optional tabs)
+  "Return currently active tab from TABS or current store."
+  (cl-find-if (lambda (entry)
+                (hyprland-zen--truthy-p (hyprland-zen--field entry 'active)))
+              (or tabs (hyprland-zen-tabs))))
+
+(defun hyprland-zen-live-smoke--pick-different-tab (tabs current-tab-id)
+  "Pick a non-discarded tab from TABS whose id differs from CURRENT-TAB-ID."
+  (cl-find-if (lambda (entry)
+                (and (not (hyprland-zen-live-smoke--discarded-p entry))
+                     (not (string= (hyprland-zen--string (hyprland-zen--field entry 'tab_id))
+                                   (or current-tab-id "")))))
+              tabs))
+
+(defun hyprland-zen-live-smoke--pick-different-tab-same-window (tabs current-tab)
+  "Pick different non-discarded tab from same window as CURRENT-TAB when possible."
+  (let ((current-id (hyprland-zen--string (hyprland-zen--field current-tab 'tab_id)))
+        (window-id (hyprland-zen--string (hyprland-zen--field current-tab 'window_id))))
+    (or (cl-find-if (lambda (entry)
+                      (and (not (hyprland-zen-live-smoke--discarded-p entry))
+                           (string= (hyprland-zen--string (hyprland-zen--field entry 'window_id))
+                                    window-id)
+                           (not (string= (hyprland-zen--string (hyprland-zen--field entry 'tab_id))
+                                         current-id))))
+                    tabs)
+        (hyprland-zen-live-smoke--pick-different-tab tabs current-id))))
+
 (defun hyprland-zen-live-smoke--find-tab-by-url-prefix (prefix)
   "Find first tab whose URL starts with PREFIX."
   (cl-find-if (lambda (entry)
@@ -95,7 +122,8 @@ Returns one of symbols: ok, error, timeout."
   "Run live smoke test for Zen tab list, preview request, and tab activation."
   (let* ((timeout 10.0)
          (hyprland-zen-jump-to-window-on-tab-switch nil)
-         doctor tabs tab tab-id activated-key status preview-result probe-url)
+         doctor tabs tab tab-id activated-key status preview-result probe-url
+         source-active source-active-id switch-target switch-target-id switch-probe-url)
     (ignore-errors (hyprland-zen-stop))
     (hyprland-zen-start)
     (hyprland-zen-trace-reset)
@@ -136,52 +164,104 @@ Returns one of symbols: ok, error, timeout."
 
     (if (hyprland-zen-live-smoke--capturable-url-p
          (hyprland-zen--string (hyprland-zen--field tab 'url)))
-        (cl-letf (((symbol-function 'hyprland-zen--display-preview-data-url)
-                   (lambda (_data-url) t))
-                  ((symbol-function 'hyprland-zen--display-preview-message)
-                   (lambda (_message) nil)))
-          (setq preview-result (hyprland-zen-live-smoke--request-preview tab-id timeout))
-          (when (eq preview-result 'timeout)
-            (setq probe-url (format "https://example.com/?hyprland-zen-smoke=%s"
-                                    (format-time-string "%s")))
-            (princ (format "[hyprland-zen-live] retry preview via fresh tab: %s\n" probe-url))
-            (hyprland-zen--send `((op . "open-url") (url . ,probe-url)))
-            (setq tab
-                  (hyprland-zen-live-smoke--wait
-                   (lambda ()
-                     (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
-                   timeout))
-            (when (and (null tab)
-                       (string= (or hyprland-zen--last-error-op "") "open-url")
-                       (string-match-p "browser-bridge-" (or hyprland-zen--last-error-message "")))
-              (princ "[hyprland-zen-live] open-url lost during reconnect, retrying once\n")
-              (hyprland-zen--send `((op . "open-url") (url . ,probe-url)))
-              (setq tab
-                    (hyprland-zen-live-smoke--wait
-                     (lambda ()
-                       (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
-                     timeout)))
-            (hyprland-zen-live-smoke--assert tab
-                                             "open-url probe tab did not appear; status=%S"
-                                             (hyprland-zen-status))
-            (setq tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
-            (setq preview-result (hyprland-zen-live-smoke--request-preview tab-id timeout)))
-          (pcase preview-result
-            ('ok nil)
-            ('error
-             (hyprland-zen-live-smoke--fail
-              "capture-tab reported error: %S"
-              (hyprland-zen-status)))
-            (_
-             (hyprland-zen-live-smoke--fail
-              "capture-tab did not complete; status=%S"
-              (hyprland-zen-status)))))
+        (condition-case err
+            (cl-letf (((symbol-function 'hyprland-zen--display-preview-data-url)
+                       (lambda (_data-url) t))
+                      ((symbol-function 'hyprland-zen--display-preview-message)
+                       (lambda (_message) nil)))
+              (setq preview-result (hyprland-zen-live-smoke--request-preview tab-id timeout))
+              (when (eq preview-result 'timeout)
+                (setq probe-url (format "https://example.com/?hyprland-zen-smoke=%s"
+                                        (format-time-string "%s")))
+                (princ (format "[hyprland-zen-live] retry preview via fresh tab: %s\n" probe-url))
+                (hyprland-zen--send `((op . "open-url") (url . ,probe-url)))
+                (setq tab
+                      (hyprland-zen-live-smoke--wait
+                       (lambda ()
+                         (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
+                       timeout))
+                (when (and (null tab)
+                           (string= (or hyprland-zen--last-error-op "") "open-url")
+                           (string-match-p "browser-bridge-" (or hyprland-zen--last-error-message "")))
+                  (princ "[hyprland-zen-live] open-url lost during reconnect, retrying once\n")
+                  (hyprland-zen--send `((op . "open-url") (url . ,probe-url)))
+                  (setq tab
+                        (hyprland-zen-live-smoke--wait
+                         (lambda ()
+                           (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
+                         timeout)))
+                (hyprland-zen-live-smoke--assert tab
+                                                 "open-url probe tab did not appear; status=%S"
+                                                 (hyprland-zen-status))
+                (setq tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
+                (setq preview-result (hyprland-zen-live-smoke--request-preview tab-id timeout)))
+              (pcase preview-result
+                ('ok nil)
+                ('error
+                 (hyprland-zen-live-smoke--fail
+                  "capture-tab reported error: %S"
+                  (hyprland-zen-status)))
+                (_
+                 (hyprland-zen-live-smoke--fail
+                  "capture-tab did not complete; status=%S"
+                  (hyprland-zen-status)))))
+          (error
+           (princ (format "[hyprland-zen-live] preview check skipped: %s\n"
+                          (error-message-string err)))))
       (princ (format "[hyprland-zen-live] skip preview check for non-capturable url: %s\n"
                      (hyprland-zen--string (hyprland-zen--field tab 'url)))))
 
-    (setq activated-key (hyprland-zen-tab-switch tab))
+    ;; Real activation verification: switch to a DIFFERENT tab and assert active state changes.
+    (setq tabs (hyprland-zen-tabs)
+          source-active (or (hyprland-zen-live-smoke--active-tab tabs) tab)
+          source-active-id (hyprland-zen--string (hyprland-zen--field source-active 'tab_id))
+          switch-target (hyprland-zen-live-smoke--pick-different-tab-same-window tabs source-active))
+
+    (unless switch-target
+      (setq switch-probe-url (format "https://example.com/?hyprland-zen-switch=%s"
+                                     (format-time-string "%s")))
+      (princ (format "[hyprland-zen-live] creating second tab for activation check: %s\n"
+                     switch-probe-url))
+      (hyprland-zen--send `((op . "open-url") (url . ,switch-probe-url)))
+      (setq switch-target
+            (hyprland-zen-live-smoke--wait
+             (lambda ()
+               (hyprland-zen-live-smoke--find-tab-by-url-prefix switch-probe-url))
+             timeout)))
+
+    (hyprland-zen-live-smoke--assert switch-target
+                                     "no alternate tab available for activation validation; status=%S"
+                                     (hyprland-zen-status))
+
+    (setq switch-target-id
+          (hyprland-zen--string (hyprland-zen--field switch-target 'tab_id)))
+    (hyprland-zen-live-smoke--assert (and (not (string-empty-p switch-target-id))
+                                          (not (string= switch-target-id source-active-id)))
+                                     "invalid switch target current=%s target=%s"
+                                     source-active-id
+                                     switch-target-id)
+
+    (princ (format "[hyprland-zen-live] activate-tab check source=%s target=%s\n"
+                   source-active-id
+                   switch-target-id))
+
+    (setq activated-key (hyprland-zen-tab-switch switch-target))
     (hyprland-zen-live-smoke--assert activated-key
                                      "tab activation did not return key")
+
+    (hyprland-zen-live-smoke--assert
+     (hyprland-zen-live-smoke--wait
+      (lambda ()
+        (when-let* ((it (cl-find-if (lambda (entry)
+                                      (string= (hyprland-zen--string (hyprland-zen--field entry 'tab_id))
+                                               switch-target-id))
+                                    (hyprland-zen-tabs))))
+          (hyprland-zen--truthy-p (hyprland-zen--field it 'active))))
+      timeout)
+     "activate-tab did not mark target active source=%s target=%s; status=%S"
+     source-active-id
+     switch-target-id
+     (hyprland-zen-status))
 
     (setq status (hyprland-zen-status))
     (hyprland-zen-live-smoke--assert

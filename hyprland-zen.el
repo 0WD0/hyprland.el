@@ -819,6 +819,8 @@ Active tabs are sorted first, then by title."
          (when (or (string-match-p "browser-bridge-not-connected" reason)
                    (string-match-p "browser-bridge-disconnected" reason))
            (setq hyprland-zen--bridge-connected nil)
+           (when (member op-name '("list-tabs" "list-workspaces"))
+             (hyprland-zen--schedule-retry-refresh))
            (if (member op-name '("open-url" "capture-tab" "activate-tab" "activate-workspace"))
                (setq hyprland-zen--bridge-not-connected-streak
                      (max hyprland-zen--bridge-not-connected-streak
@@ -1074,11 +1076,15 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
 (defun hyprland-zen-refresh ()
   "Request full tab snapshot from Zen host."
   (interactive)
+  (unless (hyprland-zen-running-p)
+    (hyprland-zen-start))
   (hyprland-zen--send '((op . "list-tabs"))))
 
 (defun hyprland-zen-refresh-workspaces ()
   "Request full workspace snapshot from Zen host."
   (interactive)
+  (unless (hyprland-zen-running-p)
+    (hyprland-zen-start))
   (hyprland-zen--send '((op . "list-workspaces"))))
 
 (defun hyprland-zen-open-url (url)
