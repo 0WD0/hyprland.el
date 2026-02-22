@@ -209,6 +209,30 @@ diagnosis in real environments."
                            (hyprland-zen--truthy-p (hyprland-zen--field tab 'active)))))
                   (hyprland-zen-tabs)))))
 
+(defun hyprland-zen--tab-in-window (window-id &optional exclude-tab-id)
+  "Return any tab from WINDOW-ID, optionally excluding EXCLUDE-TAB-ID."
+  (let ((wid (hyprland-zen--string window-id))
+        (exclude (hyprland-zen--string exclude-tab-id)))
+    (unless (string-empty-p wid)
+      (cl-find-if (lambda (tab)
+                    (let ((tab-window-id (hyprland-zen--window-id tab))
+                          (tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id))))
+                      (and (stringp tab-window-id)
+                           (string= wid tab-window-id)
+                           (or (string-empty-p exclude)
+                               (not (string= tab-id exclude))))))
+                  (hyprland-zen-tabs)))))
+
+(defun hyprland-zen--active-hyprland-window-title ()
+  "Return active browser-window title from Hyprland, or nil."
+  (condition-case _err
+      (when-let* ((active (hyprland--hyprctl-json "activewindow"))
+                  (_ (hyprland-zen--browser-class-p (hyprland-zen--field active 'class)))
+                  (title (hyprland-zen--string (hyprland-zen--field active 'title))))
+        (unless (string-empty-p title)
+          title))
+    (error nil)))
+
 (defun hyprland-zen--title-match-score (window-title tab-title)
   "Return match score between WINDOW-TITLE and TAB-TITLE."
   (let* ((w (downcase (hyprland-zen--string window-title)))
@@ -314,10 +338,20 @@ title used as keyword2."
             t)
         (error nil)))))
 
-(defun hyprland-zen--keyword1-addresses-for-window (window-id)
+(defun hyprland-zen--keyword1-addresses-for-window (window-id &optional target-tab-id)
   "Return pre-activate keyword1 candidate addresses for WINDOW-ID."
-  (when-let* ((tab (hyprland-zen--active-tab-for-window window-id))
-              (title (hyprland-zen--field tab 'title)))
+  (let (title)
+    (unless (hyprland-zen--active-tab-for-window window-id)
+      (when (hyprland-zen-running-p)
+        (ignore-errors
+          (hyprland-zen-refresh)
+          (hyprland-zen--wait-for-tabs 0.35))))
+    (setq title
+          (or (when-let* ((tab (hyprland-zen--active-tab-for-window window-id)))
+                (hyprland-zen--field tab 'title))
+              (when-let* ((tab (hyprland-zen--tab-in-window window-id target-tab-id)))
+                (hyprland-zen--field tab 'title))
+              (hyprland-zen--active-hyprland-window-title)))
     (hyprland-zen--best-match-addresses-by-title title)))
 
 (defun hyprland-zen--post-activate-window-sync (_window-id tab-title keyword1-addresses)
@@ -1271,8 +1305,8 @@ When TAB is nil, prompt from current registry."
          (key (hyprland-zen--tab-key target))
          (window-id (hyprland-zen--window-id target))
          (tab-title (hyprland-zen--string (hyprland-zen--field target 'title)))
-         (keyword1-addresses (hyprland-zen--keyword1-addresses-for-window window-id))
          (tab-id (hyprland-zen--string (hyprland-zen--field target 'tab_id)))
+         (keyword1-addresses (hyprland-zen--keyword1-addresses-for-window window-id tab-id))
          (workspace-id (hyprland-zen--string (hyprland-zen--field target 'workspace_id)))
          (sync-group (hyprland-zen--string (hyprland-zen--field target 'sync_group)))
          (payload `((op . "activate-tab")
