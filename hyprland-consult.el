@@ -64,27 +64,30 @@ return action both receive the same structured value."
 (defun hyprland-consult--render-preview-buffer (buffer payload)
   "Render PAYLOAD into preview BUFFER."
   (with-current-buffer buffer
-    (setq buffer-read-only nil)
-    (erase-buffer)
-    (pcase (plist-get payload :ok)
-      ('t
-       (let* ((bytes (or (plist-get payload :image-bytes)
-                         (plist-get payload :png-bytes)))
-              (image-type (or (plist-get payload :image-type) 'png)))
-         (condition-case err
-             (if (and bytes
-                      (display-images-p)
-                      (image-type-available-p image-type))
-                 (progn
-                   (set-buffer-multibyte nil)
-                   (insert-image (create-image bytes image-type t :scale 0.45))
-                   (insert "\n"))
-               (insert "Preview image unavailable in current Emacs display\n"))
-           (error
-             (insert (format "Preview render error: %s\n" (error-message-string err)))))))
-      (_
-       (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
-    (setq buffer-read-only t)
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (setq buffer-read-only nil)
+      (goto-char (point-min))
+      (erase-buffer)
+      (pcase (plist-get payload :ok)
+        ('t
+         (let* ((bytes (or (plist-get payload :image-bytes)
+                           (plist-get payload :png-bytes)))
+                (image-type (or (plist-get payload :image-type) 'png)))
+           (condition-case err
+               (if (and bytes
+                        (display-images-p)
+                        (image-type-available-p image-type))
+                   (progn
+                     (set-buffer-multibyte nil)
+                     (insert-image (create-image bytes image-type t :scale 0.45))
+                     (insert "\n"))
+                 (insert "Preview image unavailable in current Emacs display\n"))
+             (error
+              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
+        (_
+         (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
+      (setq buffer-read-only t))
     (image-mode)))
 
 (defun hyprland-consult--preview-base-window ()

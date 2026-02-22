@@ -103,6 +103,31 @@
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
 
+(ert-deftest hyprland-consult-test-render-preview-buffer/inhibits-read-only-text-properties ()
+  (let ((buf (get-buffer-create " *hyprland-preview-render-ro*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-images-p)
+                   (lambda () nil))
+                  ((symbol-function 'image-mode)
+                   #'ignore))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "locked")
+            (add-text-properties (point-min) (point-max) '(read-only t))
+            (setq buffer-read-only t))
+          (should
+           (equal
+            'ok
+            (condition-case _err
+                (progn
+                  (hyprland-consult--render-preview-buffer
+                   buf
+                   (list :ok nil :message "updated"))
+                  'ok)
+              (text-read-only 'text-read-only)))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 (ert-deftest hyprland-consult-test-cleanup-preview/restores-current-window ()
   (let ((preview (get-buffer-create " *hyprland-preview*"))
         (origin (get-buffer-create " *hyprland-origin*"))

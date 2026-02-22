@@ -73,6 +73,7 @@ Examples:
 (defvar hyprland-zen--fragment "")
 (defvar hyprland-zen--preview-tab-id nil)
 (defvar hyprland-zen--preview-candidates nil)
+(defvar hyprland-zen--retry-refresh-timer nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -298,6 +299,20 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0))
+
+(defun hyprland-zen--schedule-retry-refresh ()
+  "Schedule a short delayed refresh after bridge-not-connected errors."
+  (when (timerp hyprland-zen--retry-refresh-timer)
+    (cancel-timer hyprland-zen--retry-refresh-timer))
+  (setq hyprland-zen--retry-refresh-timer
+        (run-at-time
+         0.8 nil
+         (lambda ()
+           (setq hyprland-zen--retry-refresh-timer nil)
+           (when (hyprland-zen-running-p)
+             (ignore-errors
+               (hyprland-zen-refresh)
+               (hyprland-zen-refresh-workspaces)))))))
 
 (defun hyprland-zen--ensure-tabs-ready ()
   "Ensure host is running and attempt to populate tab snapshot.
@@ -598,6 +613,10 @@ Active tabs are sorted first, then by title."
        (hyprland-zen--record-error
         (hyprland-zen--field message 'message)
         (hyprland-zen--field message 'op))
+       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
+         (when (or (string-match-p "browser-bridge-not-connected" reason)
+                   (string-match-p "browser-bridge-disconnected" reason))
+           (hyprland-zen--schedule-retry-refresh)))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
@@ -696,10 +715,14 @@ Active tabs are sorted first, then by title."
   (interactive)
   (when (process-live-p hyprland-zen--process)
     (delete-process hyprland-zen--process))
+  (when (timerp hyprland-zen--retry-refresh-timer)
+    (cancel-timer hyprland-zen--retry-refresh-timer))
   (setq hyprland-zen--preview-tab-id nil)
+  (setq hyprland-zen--preview-candidates nil)
   (hyprland-consult--cleanup-preview)
   (setq hyprland-zen--process nil
-        hyprland-zen--fragment ""))
+        hyprland-zen--fragment ""
+        hyprland-zen--retry-refresh-timer nil))
 
 (defun hyprland-zen-status ()
   "Return and optionally print current Zen bridge diagnostics.
@@ -790,6 +813,22 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
   (hyprland-zen--send `((op . "open-url")
                         (url . ,url))))
 
+(defun hyprland-zen--resolve-selection (selected candidates field)
+  "Resolve SELECTED value back to candidate object carrying FIELD.
+
+SELECTED may already be an alist object or a completion label string from
+different completion frontends/versions. CANDIDATES is the original
+`(LABEL . OBJECT)' alist."
+  (cond
+   ((and (listp selected)
+         (hyprland-zen--field selected field))
+    selected)
+   ((stringp selected)
+    (or (when (fboundp 'consult--lookup-cdr)
+          (consult--lookup-cdr selected candidates nil))
+        (cdr (assoc selected candidates))))
+   (t nil)))
+
 (defun hyprland-zen--read-tab (prompt)
   "Read tab from completion list using PROMPT."
   (let* ((tabs (hyprland-zen--ensure-tabs-ready))
@@ -802,13 +841,18 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
     (if (and (fboundp 'consult--read)
              (fboundp 'consult--lookup-cdr))
         (let ((hyprland-zen--preview-candidates cands))
-          (consult--read cands
-                         :prompt prompt
-                         :require-match t
-                         :sort nil
-                         :lookup #'consult--lookup-cdr
-                         :preview-key hyprland-zen-preview-key
-                         :state #'hyprland-zen--preview-state))
+          (let* ((selected
+                  (consult--read cands
+                                 :prompt prompt
+                                 :require-match t
+                                 :sort nil
+                                 :lookup #'consult--lookup-cdr
+                                 :preview-key hyprland-zen-preview-key
+                                 :state #'hyprland-zen--preview-state))
+                 (tab (hyprland-zen--resolve-selection selected cands 'tab_id)))
+            (unless tab
+              (user-error "Selected Zen tab metadata is unavailable; run `M-x hyprland-zen-refresh'"))
+            tab))
       (cdr (assoc (completing-read prompt cands nil t) cands)))))
 
 (defun hyprland-zen--read-workspace (prompt)
@@ -820,7 +864,11 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
     (unless cands
       (user-error
        "No Zen workspaces available (bridge disconnected or extension not ready). Check `M-x hyprland-zen-status' / `M-x hyprland-zen-doctor'"))
-    (cdr (assoc (completing-read prompt cands nil t) cands))))
+    (let* ((selected (completing-read prompt cands nil t))
+           (workspace (hyprland-zen--resolve-selection selected cands 'workspace_id)))
+      (unless workspace
+        (user-error "Selected Zen workspace metadata is unavailable; run `M-x hyprland-zen-refresh-workspaces'"))
+      workspace)))
 
 (defun hyprland-zen-tab-switch (&optional tab)
   "Activate TAB via host command.
