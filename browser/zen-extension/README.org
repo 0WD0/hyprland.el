@@ -8,16 +8,15 @@ commands from that host.
 Current workspace support is Firefox-compatible and derived from:
 
 - browser window id
-- cookieStoreId (container)
 
 Why not native Zen workspace UUID?
 
 - Zen tracks internal workspace on browser chrome tab attributes (for example
   ~zen-workspace-id~), but regular WebExtensions operate on the public
   ~tabs.Tab~ object surface.
-- On current Zen/Firefox extension APIs, the stable fields available to this
-  bridge are still window/container identifiers, so workspace mapping uses
-  ~windowId + cookieStoreId~.
+- On current Zen/Firefox extension APIs, the stable field used by this bridge
+  for workspace identity is browser window id, so workspace mapping uses
+  ~win:<windowId>~.
 
 So it works on plain Firefox and Zen, while leaving room for future Zen-only
 workspace APIs.
@@ -72,7 +71,7 @@ Native-host executables live in:
 - inbound from browser events:
   - ~snapshot~, ~upsert~, ~remove~
   - ~workspace_snapshot~, ~workspace-upsert~, ~workspace-remove~
-  - tab payload includes ~window_id~, ~cookie_store_id~, and heuristic ~sync_group~
+- tab payload includes ~window_id~, ~cookie_store_id~, and heuristic ~sync_group~
 - inbound preview response:
   - ~preview~ (data URL image)
 - accepted ops from host:
@@ -102,5 +101,5 @@ Zen sync-window/workspace internals (for example internal workspace UUID and
 unsynced-window flags) are not available to regular WebExtensions.
 This extension therefore uses public API identifiers and heuristics:
 
-- workspace key: ~windowId + cookieStoreId~
+- workspace key: ~win:<windowId>~
 - sync group hint: ~container:<cookieStoreId>~

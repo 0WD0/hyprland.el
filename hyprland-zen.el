@@ -180,9 +180,8 @@ diagnosis in real environments."
             (cons local (cdr cmd)))))))))
 
 (defun hyprland-zen--field (alist key)
-  "Return ALIST field KEY, allowing both symbol and string keys."
-  (or (alist-get key alist)
-      (alist-get (symbol-name key) alist nil nil #'string=)))
+  "Return ALIST field KEY."
+  (alist-get key alist))
 
 (defun hyprland-zen--truthy-p (value)
   "Return non-nil when VALUE should be interpreted as true."
@@ -703,9 +702,8 @@ Return current workspace list (possibly empty)."
          (name
           (hyprland-zen--string
            (or (hyprland-zen--field workspace 'name)
-               (hyprland-zen--field workspace 'title)
                (hyprland-zen--workspace-friendly-name workspace-id))
-           "default")))
+            "default")))
     (list
      (cons 'browser browser)
      (cons 'profile profile)
@@ -895,17 +893,15 @@ Active tabs are sorted first, then by title."
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
       ("upsert"
-       (when-let* ((tab (or (hyprland-zen--field message 'tab)
-                            message))
+       (when-let* ((tab (hyprland-zen--field message 'tab))
                    (stored (hyprland-zen--store-tab tab)))
-         (run-hooks 'hyprland-zen-after-refresh-hook)
-         t))
+          (run-hooks 'hyprland-zen-after-refresh-hook)
+          t))
       ("workspace-upsert"
-       (when-let* ((workspace (or (hyprland-zen--field message 'workspace)
-                                  message)))
-         (hyprland-zen--store-workspace workspace)
-         (run-hooks 'hyprland-zen-after-refresh-hook)
-         t))
+       (when-let* ((workspace (hyprland-zen--field message 'workspace)))
+          (hyprland-zen--store-workspace workspace)
+          (run-hooks 'hyprland-zen-after-refresh-hook)
+          t))
       ("bridge-state"
        (setq hyprland-zen--bridge-connected
              (hyprland-zen--truthy-p (hyprland-zen--field message 'connected))
@@ -1400,10 +1396,10 @@ When TAB is nil, prompt from current registry."
 When TAB is nil, prompt from current registry."
   (interactive)
   (let* ((target (or tab (hyprland-zen--read-tab "Close Zen tab: ")))
-         (key (hyprland-zen--tab-key target)))
+         (tab-id (hyprland-zen--string (hyprland-zen--field target 'tab_id))))
     (hyprland-zen--send `((op . "close-tab")
-                          (key . ,key)))
-    key))
+                          (tab_id . ,tab-id)))
+    (hyprland-zen--tab-key target)))
 
 (defun hyprland-zen-workspace-switch (&optional workspace)
   "Activate WORKSPACE via host command.
@@ -1411,16 +1407,16 @@ When TAB is nil, prompt from current registry."
 When WORKSPACE is nil, prompt from current registry."
   (interactive)
   (let* ((target (or workspace (hyprland-zen--read-workspace "Zen workspace: ")))
-         (key (hyprland-zen--workspace-key target)))
+         (workspace-id (hyprland-zen--string (hyprland-zen--field target 'workspace_id))))
     (when (called-interactively-p 'interactive)
       (unless (or hyprland-zen--bridge-connected
                   (hyprland-zen--wait-for-bridge 1.5))
         (user-error "Zen bridge is reconnecting; activate-workspace aborted")))
     (hyprland-zen--send-with-queued-retry
      `((op . "activate-workspace")
-       (key . ,key))
+       (workspace_id . ,workspace-id))
      hyprland-zen-op-retry-timeout)
-    key))
+    (hyprland-zen--workspace-key target)))
 
 (define-minor-mode hyprland-zen-mode
   "Keep Zen bridge host process active."

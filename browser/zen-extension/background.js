@@ -46,11 +46,7 @@ function workspaceKey(tab) {
 }
 
 function workspaceName(tab) {
-  const container = tab.cookieStoreId || "default";
-  if (container === "default") {
-    return `Window ${tab.windowId}`;
-  }
-  return `Window ${tab.windowId} (${container})`;
+  return `Window ${tab.windowId}`;
 }
 
 function workspacePayloadFromTab(tab) {
@@ -221,15 +217,12 @@ async function shrinkPreviewDataUrl(dataUrl) {
 }
 
 async function activateWorkspaceByKey(key) {
-  const rawKey = String(key || "");
-  const normalizedKey = rawKey.split("/").length >= 3
-    ? rawKey.split("/").slice(2).join("/")
-    : rawKey;
+  const normalizedKey = String(key || "");
   const tabs = await browser.tabs.query({});
   const target = tabs.find((tab) => workspaceKey(tab) === normalizedKey && !tab.discarded) ||
     tabs.find((tab) => workspaceKey(tab) === normalizedKey);
   if (!target) {
-    throw new Error(`Workspace not found: ${rawKey}`);
+    throw new Error(`Workspace not found: ${normalizedKey}`);
   }
   await browser.windows.update(target.windowId, { focused: true });
   await browser.tabs.update(target.id, { active: true });
@@ -240,13 +233,7 @@ function parseTabIdFromMessage(message) {
   if (Number.isInteger(fromId)) {
     return fromId;
   }
-  const key = String(message.key || "");
-  const raw = key.split("/").pop();
-  const parsed = Number(raw);
-  if (Number.isInteger(parsed)) {
-    return parsed;
-  }
-  throw new Error(`Invalid tab key/tab_id: ${key || message.tab_id}`);
+  throw new Error(`Invalid tab_id: ${message.tab_id}`);
 }
 
 async function handleOp(message) {
@@ -286,7 +273,7 @@ async function handleOp(message) {
       await browser.tabs.create({ url: message.url });
       break;
     case "activate-workspace":
-      await activateWorkspaceByKey(message.key);
+      await activateWorkspaceByKey(message.workspace_id);
       break;
     case "capture-tab": {
       const rawDataUrl = await captureForTab(message.tab_id);

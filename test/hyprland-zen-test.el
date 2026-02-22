@@ -622,7 +622,7 @@
                (lambda (msg &optional _timeout) (setq payload msg))))
       (should (equal (hyprland-zen-tab-switch) "zen/default/9"))
       (should (equal (hyprland-zen--field payload 'op) "activate-tab"))
-      (should (equal (hyprland-zen--field payload 'key) "zen/default/9")))))
+      (should (equal (hyprland-zen--field payload 'tab_id) "9")))))
 
 (ert-deftest hyprland-zen-test-tab-switch/schedules-post-activate-window-sync ()
   (let ((tab '((browser . "zen")
@@ -730,7 +730,7 @@
                (lambda (msg &optional _timeout) (setq payload msg))))
       (should (equal (hyprland-zen-workspace-switch) "zen/default/w9"))
       (should (equal (hyprland-zen--field payload 'op) "activate-workspace"))
-      (should (equal (hyprland-zen--field payload 'key) "zen/default/w9")))))
+      (should (equal (hyprland-zen--field payload 'workspace_id) "w9")))))
 
 (ert-deftest hyprland-zen-test-mode/toggles-start-stop ()
   (let (started stopped)
