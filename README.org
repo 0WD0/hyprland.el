@@ -321,6 +321,8 @@ How to read failures quickly:
 - ~doctor~ prints ~result=PASS/FAIL~ and compact ~trace-summary~ lines.
 - If ~last-error-message~ contains ~browser-bridge-not-connected~:
   - reload Zen/Firefox extension (or toggle it off/on)
+  - or restart only native host process (equivalent low-level recovery):
+    ~pkill -f 'hyprland-zen-native-host .*hyprland-zen-bridge@0wd0'~
   - verify native host manifest path + extension id match
   - rerun ~doctor~
 - If ~live~ fails at ~capture-tab~:

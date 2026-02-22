@@ -151,6 +151,16 @@ Returns one of symbols: ok, error, timeout."
                    (lambda ()
                      (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
                    timeout))
+            (when (and (null tab)
+                       (string= (or hyprland-zen--last-error-op "") "open-url")
+                       (string-match-p "browser-bridge-" (or hyprland-zen--last-error-message "")))
+              (princ "[hyprland-zen-live] open-url lost during reconnect, retrying once\n")
+              (hyprland-zen--send `((op . "open-url") (url . ,probe-url)))
+              (setq tab
+                    (hyprland-zen-live-smoke--wait
+                     (lambda ()
+                       (hyprland-zen-live-smoke--find-tab-by-url-prefix probe-url))
+                     timeout)))
             (hyprland-zen-live-smoke--assert tab
                                              "open-url probe tab did not appear; status=%S"
                                              (hyprland-zen-status))

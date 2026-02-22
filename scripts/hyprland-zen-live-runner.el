@@ -9,7 +9,15 @@
 ;;; Code:
 
 (setq debug-on-error nil)
-(setq debug-early-backtrace nil)
+(when (boundp 'debug-early-backtrace)
+  (set 'debug-early-backtrace nil))
+
+(defvar hyprland-zen-live-smoke-auto-run t)
+
+(declare-function hyprland-zen-live-smoke-run "hyprland-zen-live-smoke-test" ())
+(declare-function hyprland-zen-status "hyprland-zen" ())
+(declare-function hyprland-zen-trace-report "hyprland-zen" (&optional limit))
+(declare-function hyprland-zen-stop "hyprland-zen" ())
 
 (defun hyprland-zen-live-runner--trim-string (s &optional max-len)
   "Return S trimmed to MAX-LEN characters with ellipsis when needed."
