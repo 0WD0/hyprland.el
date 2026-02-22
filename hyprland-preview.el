@@ -79,26 +79,21 @@ window briefly and restoring prior focus after capture."
       (or (string-match-p hyprland-preview-sensitive-regexp title)
           (string-match-p hyprland-preview-sensitive-regexp class)))))
 
-(defun hyprland-preview--stable-id->identifier (stable-id)
-  "Convert STABLE-ID to lower-case hex string without 0x.
+(defun hyprland-preview--address->identifier (address)
+  "Convert Hyprland window ADDRESS to grim -T identifier string.
 
-Return nil when conversion fails validation."
-  (let ((id
-         (cond
-          ((integerp stable-id) (format "%x" stable-id))
-          ((stringp stable-id)
-           (let ((s (downcase (string-trim stable-id))))
-             (if (string-prefix-p "0x" s) (substring s 2) s)))
-          (t nil))))
-    (when (and id (string-match-p "\\`[0-9a-f]+\\'" id))
-      id)))
+Identifier is lower-case 16-digit hex without 0x prefix."
+  (let* ((normalized (hyprland--normalize-address address))
+         (raw (and normalized (downcase (string-trim normalized)))))
+    (when (and raw (string-match-p "\\`0x[0-9a-f]+\\'" raw))
+      (format "%016x" (string-to-number (substring raw 2) 16)))))
 
 (defun hyprland-preview--cache-key (window)
   "Build preview cache key for WINDOW."
   (format "%s|%s|%s|%s|%s"
           (or (hyprland--instance-signature) "")
           (or (alist-get 'address window) "")
-          (or (alist-get 'stable_id window) "")
+          "grim-t"
           (sxhash (or (alist-get 'title window) ""))
           (or (alist-get 'size window) "")))
 
@@ -163,10 +158,10 @@ Return nil when conversion fails validation."
 (defun hyprland-preview--capture-args (window)
   "Return grim command args for capturing WINDOW preview.
 
-Signal an error when stable id cannot be converted into grim identifier."
-  (let ((identifier (hyprland-preview--stable-id->identifier (alist-get 'stable_id window))))
+Signal an error when window address cannot be converted into grim identifier."
+  (let ((identifier (hyprland-preview--address->identifier (alist-get 'address window))))
     (unless identifier
-      (error "Window missing stable_id for grim -T capture"))
+      (error "Window missing valid address for grim -T capture"))
     (append (when hyprland-preview-overlay-cursor (list "-c"))
             (list "-T" identifier "-"))))
 

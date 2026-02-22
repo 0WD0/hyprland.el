@@ -7,14 +7,11 @@
 (require 'ert)
 (require 'hyprland-preview)
 
-(ert-deftest hyprland-preview-test-stable-id/number ()
-  (should (equal (hyprland-preview--stable-id->identifier 3735928559) "deadbeef")))
+(ert-deftest hyprland-preview-test-address-identifier/strip-0x-and-pad ()
+  (should (equal (hyprland-preview--address->identifier "0xABC123") "0000000000abc123")))
 
-(ert-deftest hyprland-preview-test-stable-id/strip-0x ()
-  (should (equal (hyprland-preview--stable-id->identifier "0xABC123") "abc123")))
-
-(ert-deftest hyprland-preview-test-stable-id/reject-invalid ()
-  (should-not (hyprland-preview--stable-id->identifier "xyz-1")))
+(ert-deftest hyprland-preview-test-address-identifier/reject-invalid ()
+  (should-not (hyprland-preview--address->identifier "xyz-1")))
 
 (ert-deftest hyprland-preview-test-focus-default-disabled ()
   (should-not (default-value 'hyprland-preview-focus-for-accurate-capture)))
@@ -47,17 +44,17 @@
       (should (= hyprland-preview--cache-bytes 0)))))
 
 (ert-deftest hyprland-preview-test-capture-args/grim-target ()
-  (let ((window '((stable_id . "0xabc"))))
+  (let ((window '((address . "0xabc"))))
     (should (equal (hyprland-preview--capture-args window)
-                   '("-T" "abc" "-")))))
+                   '("-T" "0000000000000abc" "-")))))
 
 (ert-deftest hyprland-preview-test-capture-args/grim-target-with-cursor ()
-  (let ((window '((stable_id . "0xabc")))
+  (let ((window '((address . "0xabc")))
         (hyprland-preview-overlay-cursor t))
     (should (equal (hyprland-preview--capture-args window)
-                   '("-c" "-T" "abc" "-")))))
+                   '("-c" "-T" "0000000000000abc" "-")))))
 
-(ert-deftest hyprland-preview-test-capture-args/error-without-stable-id ()
+(ert-deftest hyprland-preview-test-capture-args/error-without-address ()
   (let ((window '((title . "x"))))
     (should-error (hyprland-preview--capture-args window))))
 
@@ -83,9 +80,9 @@
       (should-not hyprland-preview--active-restore-address))))
 
 (ert-deftest hyprland-preview-test-capture-attempts/grim-only ()
-  (let ((window '((stable_id . "0xabc"))))
+  (let ((window '((address . "0xabc"))))
     (cl-letf (((symbol-function 'hyprland-preview--grim-capture-attempt)
-               (lambda (_w) '(:backend grim :program "grim" :args ("-T" "abc" "-")))))
+               (lambda (_w) '(:backend grim :program "grim" :args ("-T" "0000000000000abc" "-")))))
       (let ((attempts (hyprland-preview--capture-attempts window)))
         (should (equal (length attempts) 1))
         (should (eq (plist-get (car attempts) :backend) 'grim))))))
@@ -103,7 +100,7 @@
                #'ignore)
               ((symbol-function 'hyprland-preview--capture-attempts)
                (lambda (_window)
-                 '((:backend grim :program "grim" :args ("-T" "abc" "-")))))
+                 '((:backend grim :program "grim" :args ("-T" "0000000000000abc" "-")))))
               ((symbol-function 'make-process)
                (lambda (&rest _args)
                  (error "exec format error"))))
