@@ -83,6 +83,15 @@ diagnosis in real environments."
   :type 'number
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-notify-bridge-error-ops
+  '("list-tabs" "list-workspaces" "activate-tab" "activate-workspace")
+  "Operations that should emit bridge-disconnect echo messages.
+
+Bridge reconnect windows are expected during startup. Keeping this list explicit
+reduces noise while preserving actionable failures."
+  :type '(repeat string)
+  :group 'hyprland-zen)
+
 (defcustom hyprland-zen-native-host-auto-restart t
   "When non-nil, auto-restart stale native adapter on repeated bridge disconnects."
   :type 'boolean
@@ -102,6 +111,11 @@ diagnosis in real environments."
   "hyprland-zen-native-host .*hyprland-zen-bridge@0wd0"
   "Pattern passed to `pkill -f' for stale browser-launched native adapters."
   :type 'string
+  :group 'hyprland-zen)
+
+(defcustom hyprland-zen-activate-confirm-timeout 1.4
+  "Seconds to wait for interactive activate-tab confirmation in local store."
+  :type 'number
   :group 'hyprland-zen)
 
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
@@ -279,6 +293,47 @@ Return non-nil when jump was dispatched."
              :image-type (plist-get decoded :type)))
     (hyprland-zen--display-preview-message "Tab preview decode failed")))
 
+(defun hyprland-zen--capturable-url-p (url)
+  "Return non-nil when URL is likely capturable via browser screenshot APIs."
+  (let ((u (hyprland-zen--string url)))
+    (or (string-empty-p u)
+        (string-prefix-p "http://" u)
+        (string-prefix-p "https://" u)
+        (string-prefix-p "file://" u))))
+
+(defun hyprland-zen--wait-for-bridge (&optional timeout)
+  "Wait for bridge connectivity and snapshots up to TIMEOUT seconds."
+  (let ((deadline (+ (hyprland-zen--now) (or timeout hyprland-zen-initial-sync-timeout)))
+        (next-refresh 0.0))
+    (while (and (hyprland-zen-running-p)
+                (not hyprland-zen--bridge-connected)
+                (< (hyprland-zen--now) deadline))
+      (when (>= (hyprland-zen--now) next-refresh)
+        (ignore-errors
+          (hyprland-zen-refresh)
+          (hyprland-zen-refresh-workspaces))
+        (setq next-refresh (+ (hyprland-zen--now) 0.35)))
+      (accept-process-output hyprland-zen--process 0.12))
+    hyprland-zen--bridge-connected))
+
+(defun hyprland-zen--tab-active-p (tab-id)
+  "Return non-nil when TAB-ID exists and is marked active in local store."
+  (when-let* ((it (cl-find-if (lambda (entry)
+                                (string= (hyprland-zen--string (hyprland-zen--field entry 'tab_id))
+                                         (hyprland-zen--string tab-id)))
+                              (hyprland-zen-tabs))))
+    (hyprland-zen--truthy-p (hyprland-zen--field it 'active))))
+
+(defun hyprland-zen--wait-for-tab-active (tab-id &optional timeout)
+  "Wait up to TIMEOUT seconds until TAB-ID becomes active in local store."
+  (let ((deadline (+ (hyprland-zen--now) (or timeout hyprland-zen-activate-confirm-timeout)))
+        ok)
+    (while (and (not (setq ok (hyprland-zen--tab-active-p tab-id)))
+                (hyprland-zen-running-p)
+                (< (hyprland-zen--now) deadline))
+      (accept-process-output hyprland-zen--process 0.1))
+    ok))
+
 (defun hyprland-zen--preview-state (action cand)
   "Consult state callback for Zen tab preview.
 
@@ -298,21 +353,25 @@ ACTION and CAND follow Consult's :state contract."
                     ((and (stringp cand) hyprland-zen--preview-candidates)
                      (cdr (assoc cand hyprland-zen--preview-candidates)))
                     (t nil)))
-              (tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id))))
+              (tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
+              (url (hyprland-zen--string (hyprland-zen--field tab 'url))))
          (if (string-empty-p tab-id)
              (hyprland-zen--display-preview-message "Candidate missing tab metadata")
-           (setq hyprland-zen--preview-tab-id tab-id)
-           (hyprland-zen--display-preview-message "Loading tab preview...")
-           (if (or hyprland-zen--bridge-connected
-                   (not (and (stringp hyprland-zen--last-error-message)
-                             (string-match-p "browser-bridge-" hyprland-zen--last-error-message))))
-               (condition-case err
-                   (hyprland-zen--send `((op . "capture-tab")
-                                         (tab_id . ,tab-id)))
-                 (error
-                  (hyprland-zen--display-preview-message
-                   (format "Preview request failed: %s" (error-message-string err)))))
-             (hyprland-zen--display-preview-message "Bridge reconnecting; preview deferred"))))))
+           (if (not (hyprland-zen--capturable-url-p url))
+               (hyprland-zen--display-preview-message
+                (format "Preview unavailable for this page type: %s" (if (string-empty-p url) "<unknown>" url)))
+             (setq hyprland-zen--preview-tab-id tab-id)
+             (hyprland-zen--display-preview-message "Loading tab preview...")
+             (if (or hyprland-zen--bridge-connected
+                     (not (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message))
+                     (hyprland-zen--wait-for-bridge 0.9))
+                 (condition-case err
+                     (hyprland-zen--send `((op . "capture-tab")
+                                           (tab_id . ,tab-id)))
+                   (error
+                    (hyprland-zen--display-preview-message
+                     (format "Preview request failed: %s" (error-message-string err)))))
+               (hyprland-zen--display-preview-message "Bridge reconnecting; preview deferred")))))))
     ((or 'exit 'return)
      (setq hyprland-zen--preview-tab-id nil)
      (setq hyprland-zen--preview-candidates nil)
@@ -347,6 +406,12 @@ ACTION and CAND follow Consult's :state contract."
   "Record latest host MESSAGE and OP for diagnostics."
   (setq hyprland-zen--last-error-message (hyprland-zen--string message)
         hyprland-zen--last-error-op (hyprland-zen--string op)))
+
+(defun hyprland-zen--bridge-disconnect-message-p (message)
+  "Return non-nil when MESSAGE indicates transient bridge disconnection."
+  (and (stringp message)
+       (or (string-match-p "browser-bridge-not-connected" message)
+           (string-match-p "browser-bridge-disconnected" message))))
 
 (defun hyprland-zen--clear-bridge-disconnect-error ()
   "Clear stale disconnect diagnostics when bridge has recovered."
@@ -836,7 +901,9 @@ Active tabs are sorted first, then by title."
            (hyprland-zen--maybe-restart-native-host reason)))
        (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
                    (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
-         (when (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces"))
+         (when (and (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces"))
+                    (or (not (hyprland-zen--bridge-disconnect-message-p err-message))
+                        (member op hyprland-zen-notify-bridge-error-ops)))
            (hyprland-zen--notify-error op err-message)))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
@@ -1095,6 +1162,10 @@ TIMEOUT controls how long to wait for initial tab/workspace snapshots."
 (defun hyprland-zen-open-url (url)
   "Ask Zen host to open URL."
   (interactive "sOpen URL in Zen: ")
+  (when (called-interactively-p 'interactive)
+    (unless (or hyprland-zen--bridge-connected
+                (hyprland-zen--wait-for-bridge 1.2))
+      (user-error "Zen bridge is reconnecting; retry in a moment (M-x hyprland-zen-doctor)")))
   (hyprland-zen--send `((op . "open-url")
                         (url . ,url))))
 
@@ -1165,15 +1236,28 @@ When TAB is nil, prompt from current registry."
          (window-id (hyprland-zen--window-id target))
          (tab-id (hyprland-zen--string (hyprland-zen--field target 'tab_id)))
          (workspace-id (hyprland-zen--string (hyprland-zen--field target 'workspace_id)))
-         (sync-group (hyprland-zen--string (hyprland-zen--field target 'sync_group))))
+         (sync-group (hyprland-zen--string (hyprland-zen--field target 'sync_group)))
+         (payload `((op . "activate-tab")
+                    (key . ,key)
+                    (tab_id . ,tab-id)
+                    (window_id . ,window-id)
+                    (workspace_id . ,workspace-id)
+                    (sync_group . ,sync-group))))
+    (when (called-interactively-p 'interactive)
+      (unless (or hyprland-zen--bridge-connected
+                  (hyprland-zen--wait-for-bridge 1.5))
+        (user-error "Zen bridge is reconnecting; activate-tab aborted")))
     (when window-id
       (hyprland-zen--jump-to-known-window window-id))
-    (hyprland-zen--send `((op . "activate-tab")
-                          (key . ,key)
-                          (tab_id . ,tab-id)
-                          (window_id . ,window-id)
-                          (workspace_id . ,workspace-id)
-                          (sync_group . ,sync-group)))
+    (hyprland-zen--send payload)
+    (when (called-interactively-p 'interactive)
+      (unless (hyprland-zen--wait-for-tab-active tab-id hyprland-zen-activate-confirm-timeout)
+        (when (and (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message)
+                   (hyprland-zen--wait-for-bridge hyprland-zen-activate-confirm-timeout))
+          (hyprland-zen--send payload)
+          (hyprland-zen--wait-for-tab-active tab-id hyprland-zen-activate-confirm-timeout))
+        (unless (hyprland-zen--tab-active-p tab-id)
+          (user-error "activate-tab was not confirmed for tab %s (bridge/state may be stale)" tab-id))))
     (when window-id
       (hyprland-zen--schedule-window-address-refresh window-id))
     key))
@@ -1196,6 +1280,10 @@ When WORKSPACE is nil, prompt from current registry."
   (interactive)
   (let* ((target (or workspace (hyprland-zen--read-workspace "Zen workspace: ")))
          (key (hyprland-zen--workspace-key target)))
+    (when (called-interactively-p 'interactive)
+      (unless (or hyprland-zen--bridge-connected
+                  (hyprland-zen--wait-for-bridge 1.5))
+        (user-error "Zen bridge is reconnecting; activate-workspace aborted")))
     (hyprland-zen--send `((op . "activate-workspace")
                           (key . ,key)))
     key))
