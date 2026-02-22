@@ -258,6 +258,13 @@ If this still persists, check native host socket path details from
 ~M-x hyprland-zen-trace-report~ (error messages include ~socket=...~) to detect
 runtime-dir path mismatch.
 
+** Preview works once, then bridge disconnects
+
+This often means preview payload exceeded native-messaging safe size and the
+browser-side adapter disconnected. Current extension path now downscales and
+re-encodes captured previews before sending, and rejects oversized payloads with
+an explicit error instead of silently disconnecting.
+
 ** Need real runtime data for debugging Zen issues
 
 Collect bridge traffic from your real session (recommended before reporting bugs):

@@ -3,9 +3,34 @@
 const HOST_NAME = "hyprland_zen_bridge";
 const ENABLE_CONSOLE_FALLBACK = true;
 const RECONNECT_DELAY_MS = 1500;
+const MAX_NATIVE_MESSAGE_BYTES = 900 * 1024;
+const PREVIEW_TARGET_BYTES = 700 * 1024;
+const PREVIEW_MAX_DIMENSION = 1600;
+const PREVIEW_QUALITY_STEPS = [0.62, 0.5, 0.4, 0.32, 0.26];
+const PREVIEW_SCALE_STEPS = [1.0, 0.85, 0.7, 0.55, 0.42];
 
 let nativePort = null;
 let reconnectTimer = null;
+
+function messageBytes(message) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(message)).length;
+  } catch (_err) {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function postNative(message) {
+  if (!nativePort) {
+    return false;
+  }
+  try {
+    nativePort.postMessage(message);
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
 
 function workspaceKey(tab) {
   const container = tab.cookieStoreId || "default";
@@ -68,9 +93,23 @@ function send(message) {
     }
     return;
   }
-  try {
-    nativePort.postMessage(message);
-  } catch (_err) {
+  const bytes = messageBytes(message);
+  if (bytes > MAX_NATIVE_MESSAGE_BYTES) {
+    if (ENABLE_CONSOLE_FALLBACK) {
+      console.warn("[hyprland-zen-extension] message too large", {
+        bytes,
+        type: message?.type,
+        op: message?.op
+      });
+    }
+    postNative({
+      type: "error",
+      op: String(message?.op || message?.type || "send"),
+      message: `native-message-too-large:${bytes}`
+    });
+    return;
+  }
+  if (!postNative(message) && ENABLE_CONSOLE_FALLBACK) {
     if (ENABLE_CONSOLE_FALLBACK) {
       console.debug("[hyprland-zen-extension]", message);
     }
@@ -113,6 +152,57 @@ async function captureForTab(tabId) {
     const tab = await browser.tabs.get(id);
     return browser.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 60 });
   }
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("preview-image-load-failed"));
+    img.src = dataUrl;
+  });
+}
+
+function drawScaledJpeg(img, scale, quality) {
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  if (!ctx) {
+    throw new Error("preview-canvas-context-unavailable");
+  }
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function shrinkPreviewDataUrl(dataUrl) {
+  if (messageBytes({ data: dataUrl }) <= PREVIEW_TARGET_BYTES) {
+    return dataUrl;
+  }
+  const img = await loadImage(dataUrl);
+  const baseScale = Math.min(
+    1,
+    PREVIEW_MAX_DIMENSION / Math.max(1, img.naturalWidth, img.naturalHeight)
+  );
+  let best = dataUrl;
+  let bestBytes = messageBytes({ data: dataUrl });
+  for (const scaleStep of PREVIEW_SCALE_STEPS) {
+    const scale = Math.max(0.1, baseScale * scaleStep);
+    for (const quality of PREVIEW_QUALITY_STEPS) {
+      const candidate = drawScaledJpeg(img, scale, quality);
+      const bytes = messageBytes({ data: candidate });
+      if (bytes < bestBytes) {
+        best = candidate;
+        bestBytes = bytes;
+      }
+      if (bytes <= PREVIEW_TARGET_BYTES) {
+        return candidate;
+      }
+    }
+  }
+  return best;
 }
 
 async function activateWorkspaceByKey(key) {
@@ -180,12 +270,13 @@ async function handleOp(message) {
       await activateWorkspaceByKey(message.key);
       break;
     case "capture-tab": {
-      const imageDataUrl = await captureForTab(message.tab_id);
+      const rawDataUrl = await captureForTab(message.tab_id);
+      const imageDataUrl = await shrinkPreviewDataUrl(rawDataUrl);
       send({
         type: "preview",
         tab_id: String(message.tab_id),
         image_data_url: imageDataUrl,
-        method: "captureTab"
+        method: "captureTab+jpeg-shrink"
       });
       break;
     }
