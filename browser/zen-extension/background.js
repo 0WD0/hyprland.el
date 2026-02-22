@@ -3,6 +3,7 @@
 const HOST_NAME = "hyprland_zen_bridge";
 const ENABLE_CONSOLE_FALLBACK = true;
 const RECONNECT_DELAY_MS = 1500;
+const OUTBOUND_QUEUE_MAX = 128;
 const MAX_NATIVE_MESSAGE_BYTES = 900 * 1024;
 const PREVIEW_TARGET_BYTES = 700 * 1024;
 const PREVIEW_MAX_DIMENSION = 1600;
@@ -11,6 +12,34 @@ const PREVIEW_SCALE_STEPS = [1.0, 0.85, 0.7, 0.55, 0.42];
 
 let nativePort = null;
 let reconnectTimer = null;
+let outboundQueue = [];
+
+function enqueueOutbound(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.type === "error" && message.op === "connect-native") {
+    return;
+  }
+  outboundQueue.push(message);
+  if (outboundQueue.length > OUTBOUND_QUEUE_MAX) {
+    outboundQueue = outboundQueue.slice(outboundQueue.length - OUTBOUND_QUEUE_MAX);
+  }
+}
+
+function flushOutboundQueue() {
+  if (!nativePort || outboundQueue.length === 0) {
+    return;
+  }
+  const pending = outboundQueue;
+  outboundQueue = [];
+  for (const message of pending) {
+    if (!postNative(message)) {
+      enqueueOutbound(message);
+      break;
+    }
+  }
+}
 
 function resetNativePort() {
   if (!nativePort) {
@@ -120,6 +149,7 @@ function uniqueWorkspaces(tabs) {
 function send(message) {
   if (!nativePort) {
     scheduleReconnect();
+    enqueueOutbound(message);
     if (ENABLE_CONSOLE_FALLBACK) {
       console.debug("[hyprland-zen-extension]", message);
     }
@@ -142,6 +172,7 @@ function send(message) {
     return;
   }
   if (!postNative(message) && ENABLE_CONSOLE_FALLBACK) {
+    enqueueOutbound(message);
     if (ENABLE_CONSOLE_FALLBACK) {
       console.debug("[hyprland-zen-extension]", message);
     }
@@ -374,6 +405,7 @@ function connectNative() {
     nativePort = browser.runtime.connectNative(HOST_NAME);
     nativePort.onMessage.addListener(onNativeMessage);
     nativePort.onDisconnect.addListener(onNativeDisconnect);
+    flushOutboundQueue();
     sendSnapshot().catch((err) => {
       sendError("list-tabs", err?.message || String(err));
     });

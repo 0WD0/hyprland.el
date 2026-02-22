@@ -139,6 +139,10 @@ diagnosis in real environments."
 (defvar hyprland-zen--last-error-message nil)
 (defvar hyprland-zen--last-error-op nil)
 (defvar hyprland-zen--last-sentinel-event nil)
+(defvar hyprland-zen--bridge-connected nil)
+(defvar hyprland-zen--bridge-last-reason nil)
+(defvar hyprland-zen--queued-op-count 0)
+(defvar hyprland-zen--last-queued-op nil)
 (defvar hyprland-zen--messages-in 0)
 (defvar hyprland-zen--messages-out 0)
 
@@ -376,6 +380,10 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--bridge-not-connected-streak 0
         hyprland-zen--last-native-host-restart-at nil
         hyprland-zen--last-sentinel-event nil
+        hyprland-zen--bridge-connected nil
+        hyprland-zen--bridge-last-reason nil
+        hyprland-zen--queued-op-count 0
+        hyprland-zen--last-queued-op nil
         hyprland-zen--messages-in 0
         hyprland-zen--messages-out 0)
   (setq hyprland-zen--trace nil))
@@ -713,6 +721,8 @@ Active tabs are sorted first, then by title."
     (pcase type
       ("snapshot"
        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
+       (setq hyprland-zen--bridge-connected t
+             hyprland-zen--queued-op-count 0)
        (hyprland-zen--clear-store)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
@@ -724,6 +734,7 @@ Active tabs are sorted first, then by title."
        t)
       ((or "workspace-snapshot" "workspace_snapshot")
        (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
+       (setq hyprland-zen--bridge-connected t)
        (clrhash hyprland-zen--workspaces)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
@@ -746,6 +757,27 @@ Active tabs are sorted first, then by title."
          (hyprland-zen--store-workspace workspace)
          (run-hooks 'hyprland-zen-after-refresh-hook)
          t))
+      ((or "bridge-state" "bridge_state")
+       (setq hyprland-zen--bridge-connected
+             (hyprland-zen--truthy-p (hyprland-zen--field message 'connected))
+             hyprland-zen--bridge-last-reason
+             (hyprland-zen--string (hyprland-zen--field message 'reason)))
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       t)
+      ("queued"
+       (setq hyprland-zen--bridge-connected nil
+             hyprland-zen--last-queued-op
+             (hyprland-zen--string (hyprland-zen--field message 'op))
+             hyprland-zen--queued-op-count
+             (or (and (numberp (hyprland-zen--field message 'queue_length))
+                      (hyprland-zen--field message 'queue_length))
+                 (1+ hyprland-zen--queued-op-count)))
+       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
+         (hyprland-zen--record-error reason (hyprland-zen--field message 'op)))
+       (unless (hyprland-zen--bootstrap-active-p)
+         (hyprland-zen--start-bootstrap-retry))
+       (run-hooks 'hyprland-zen-after-refresh-hook)
+       nil)
       ("remove"
        (when-let* ((key (hyprland-zen--remove-message-key message)))
          (hyprland-zen--remove-tab-by-key key)
@@ -772,6 +804,7 @@ Active tabs are sorted first, then by title."
                    (op-name (hyprland-zen--string (hyprland-zen--field message 'op))))
          (when (or (string-match-p "browser-bridge-not-connected" reason)
                    (string-match-p "browser-bridge-disconnected" reason))
+           (setq hyprland-zen--bridge-connected nil)
            (if (member op-name '("open-url" "capture-tab" "activate-tab" "activate-workspace"))
                (setq hyprland-zen--bridge-not-connected-streak
                      (max hyprland-zen--bridge-not-connected-streak
@@ -926,6 +959,10 @@ When called interactively, print a short status line in echo area."
                 (hyprland-zen--seconds-since hyprland-zen--last-preview-request-at)
                 :last-preview-response-seconds-ago
                 (hyprland-zen--seconds-since hyprland-zen--last-preview-response-at)
+                :bridge-connected hyprland-zen--bridge-connected
+                :bridge-last-reason hyprland-zen--bridge-last-reason
+                :queued-op-count hyprland-zen--queued-op-count
+                :last-queued-op hyprland-zen--last-queued-op
                 :bootstrap-retry-seconds-left
                 (when hyprland-zen--bootstrap-deadline
                   (max 0.0 (- hyprland-zen--bootstrap-deadline (hyprland-zen--now))))
