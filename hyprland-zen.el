@@ -309,14 +309,15 @@ When ADDRESS is nil, use current active Hyprland window address."
   "Jump to mapped Hyprland window for browser WINDOW-ID.
 
 Return non-nil when jump was dispatched."
-  (or (hyprland-zen--jump-to-window-by-title tab-title window-id)
-      (hyprland-zen--jump-to-cached-window window-id)))
+  (or (hyprland-zen--jump-to-cached-window window-id)
+      (hyprland-zen--jump-to-window-by-title tab-title window-id)))
 
 (defun hyprland-zen--post-activate-window-sync (window-id tab-title)
   "After activate-tab, refresh mapping and perform explicit jump for WINDOW-ID."
   (when (and hyprland-zen-jump-to-window-on-tab-switch
              (stringp window-id)
              (not (string-empty-p window-id)))
+    (hyprland-zen--remember-window-address window-id)
     (hyprland-zen--jump-to-known-window window-id tab-title)
     (hyprland-zen--schedule-window-address-refresh window-id)))
 
@@ -558,6 +559,20 @@ Return current workspace list (possibly empty)."
                   (unless (listp workspace) workspace))))
     (hyprland-zen--string raw "default")))
 
+(defun hyprland-zen--workspace-friendly-name (workspace-id)
+  "Return user-facing workspace name derived from WORKSPACE-ID when possible."
+  (let ((raw (hyprland-zen--string workspace-id)))
+    (cond
+     ((string-match "\\`win:\\([^|]+\\)|container:\\(.+\\)\\'" raw)
+      (let ((wid (hyprland-zen--string (match-string 1 raw)))
+            (container (hyprland-zen--string (match-string 2 raw))))
+        (if (or (string-empty-p container) (string= container "default"))
+            (format "Window %s" wid)
+          (format "Window %s (%s)" wid container))))
+     ((string-match "\\`win:\\(.+\\)\\'" raw)
+      (format "Window %s" (hyprland-zen--string (match-string 1 raw))))
+     (t raw))))
+
 (defun hyprland-zen--workspace-name-from-tab (tab)
   "Extract workspace display name from TAB payload."
   (let* ((workspace (hyprland-zen--field tab 'workspace))
@@ -566,8 +581,12 @@ Return current workspace list (possibly empty)."
                   (when (listp workspace)
                     (or (hyprland-zen--field workspace 'name)
                         (hyprland-zen--field workspace 'title)
-                        (hyprland-zen--field workspace 'workspace_name))))))
-    (hyprland-zen--string raw "default")))
+                        (hyprland-zen--field workspace 'workspace_name)))))
+         (workspace-id (hyprland-zen--workspace-id-from-tab tab))
+         (name (hyprland-zen--string raw)))
+    (if (string-empty-p name)
+        (hyprland-zen--workspace-friendly-name workspace-id)
+      name)))
 
 (defun hyprland-zen--normalize-workspace (workspace)
   "Normalize WORKSPACE alist shape used by the workspace store."
@@ -584,7 +603,7 @@ Return current workspace list (possibly empty)."
           (hyprland-zen--string
            (or (hyprland-zen--field workspace 'name)
                (hyprland-zen--field workspace 'title)
-               workspace-id)
+               (hyprland-zen--workspace-friendly-name workspace-id))
            "default")))
     (list
      (cons 'browser browser)

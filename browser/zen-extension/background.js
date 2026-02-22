@@ -42,8 +42,15 @@ function postNative(message) {
 }
 
 function workspaceKey(tab) {
+  return `win:${tab.windowId}`;
+}
+
+function workspaceName(tab) {
   const container = tab.cookieStoreId || "default";
-  return `win:${tab.windowId}|container:${container}`;
+  if (container === "default") {
+    return `Window ${tab.windowId}`;
+  }
+  return `Window ${tab.windowId} (${container})`;
 }
 
 function workspacePayloadFromTab(tab) {
@@ -51,7 +58,7 @@ function workspacePayloadFromTab(tab) {
     browser: "zen",
     profile: "default",
     workspace_id: workspaceKey(tab),
-    name: workspaceKey(tab),
+    name: workspaceName(tab),
     active: !!tab.active,
     window_id: tab.windowId,
     cookie_store_id: tab.cookieStoreId || "default"
@@ -64,7 +71,7 @@ function tabPayload(tab) {
     browser: "zen",
     profile: "default",
     workspace_id: workspaceKey(tab),
-    workspace_name: workspaceKey(tab),
+    workspace_name: workspaceName(tab),
     sync_group: `container:${cookieStoreId}`,
     tab_id: String(tab.id),
     window_id: String(tab.windowId),
@@ -215,9 +222,10 @@ async function shrinkPreviewDataUrl(dataUrl) {
 
 async function activateWorkspaceByKey(key) {
   const rawKey = String(key || "");
-  const normalizedKey = rawKey.split("/").length >= 3
+  const workspacePart = rawKey.split("/").length >= 3
     ? rawKey.split("/").slice(2).join("/")
     : rawKey;
+  const normalizedKey = workspacePart.split("|container:")[0];
   const tabs = await browser.tabs.query({});
   const target = tabs.find((tab) => workspaceKey(tab) === normalizedKey && !tab.discarded) ||
     tabs.find((tab) => workspaceKey(tab) === normalizedKey);
