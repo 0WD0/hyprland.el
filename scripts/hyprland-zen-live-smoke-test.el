@@ -58,18 +58,23 @@
                                      "selected tab has empty tab_id: %S"
                                      tab)
 
-    (setq hyprland-zen--preview-tab-id tab-id
-          preview-ts-before hyprland-zen--last-preview-response-at)
-    (hyprland-zen--send `((op . "capture-tab") (tab_id . ,tab-id)))
-    (hyprland-zen-live-smoke--assert
-     (hyprland-zen-live-smoke--wait
-      (lambda ()
-        (and hyprland-zen--last-preview-response-at
-             (or (null preview-ts-before)
-                 (> hyprland-zen--last-preview-response-at preview-ts-before))))
-      timeout)
-     "capture-tab did not yield preview response; status=%S"
-     (hyprland-zen-status))
+    ;; Batch smoke should verify preview protocol readiness without requiring GUI image rendering.
+    (cl-letf (((symbol-function 'hyprland-zen--display-preview-data-url)
+               (lambda (_data-url) t))
+              ((symbol-function 'hyprland-zen--display-preview-message)
+               (lambda (_message) nil)))
+      (setq hyprland-zen--preview-tab-id tab-id
+            preview-ts-before hyprland-zen--last-preview-response-at)
+      (hyprland-zen--send `((op . "capture-tab") (tab_id . ,tab-id)))
+      (hyprland-zen-live-smoke--assert
+       (hyprland-zen-live-smoke--wait
+        (lambda ()
+          (and hyprland-zen--last-preview-response-at
+               (or (null preview-ts-before)
+                   (> hyprland-zen--last-preview-response-at preview-ts-before))))
+        timeout)
+       "capture-tab did not yield preview response; status=%S"
+       (hyprland-zen-status)))
 
     (setq activated-key (hyprland-zen-tab-switch tab))
     (hyprland-zen-live-smoke--assert activated-key
@@ -87,6 +92,10 @@
                    (plist-get status :workspace-count)
                    (plist-get status :trace-count)))))
 
-(hyprland-zen-live-smoke-run)
+(defvar hyprland-zen-live-smoke-auto-run t
+  "When non-nil, run live smoke test immediately on file load.")
+
+(when hyprland-zen-live-smoke-auto-run
+  (hyprland-zen-live-smoke-run))
 
 ;;; hyprland-zen-live-smoke-test.el ends here

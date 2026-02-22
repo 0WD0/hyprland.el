@@ -24,7 +24,22 @@ run_doctor() {
 
 run_live() {
 	echo "[hyprland-zen-test] running live smoke test (requires Zen extension + native host)"
-	eask emacs --batch -Q -l hyprland.el -l scripts/hyprland-zen-live-smoke-test.el
+	eask emacs --batch -Q -l hyprland.el -l scripts/hyprland-zen-live-runner.el
+}
+
+run_all() {
+	local failed=0
+
+	run_unit || failed=1
+	run_doctor || failed=1
+	run_live || failed=1
+
+	if [[ "${failed}" -ne 0 ]]; then
+		echo "[hyprland-zen-test] completed with failures" >&2
+		return 1
+	fi
+
+	echo "[hyprland-zen-test] all checks passed"
 }
 
 usage() {
@@ -45,9 +60,7 @@ cd "${ROOT_DIR}"
 
 case "${MODE}" in
 all)
-	run_unit
-	run_doctor
-	run_live
+	run_all
 	;;
 unit)
 	run_unit
