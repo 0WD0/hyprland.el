@@ -60,67 +60,12 @@ Examples:
   :type 'number
   :group 'hyprland-zen)
 
-(defcustom hyprland-zen-bootstrap-retry-seconds 8
-  "Seconds to keep retrying initial tab/workspace refresh after bridge start."
-  :type 'number
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-bootstrap-retry-interval 1.0
-  "Seconds between bootstrap refresh retries while bridge is warming up."
-  :type 'number
-  :group 'hyprland-zen)
-
 (defcustom hyprland-zen-trace-max-entries 240
   "Maximum number of in-memory bridge trace entries to retain.
 
 Each trace entry records inbound/outbound protocol payloads for runtime
 diagnosis in real environments."
   :type 'integer
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-error-notify-throttle-seconds 2.0
-  "Minimum seconds between identical runtime error echo messages."
-  :type 'number
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-notify-bridge-error-ops
-  '("list-tabs" "list-workspaces" "activate-tab" "activate-workspace")
-  "Operations that should emit bridge-disconnect echo messages.
-
-Bridge reconnect windows are expected during startup. Keeping this list explicit
-reduces noise while preserving actionable failures."
-  :type '(repeat string)
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-native-host-auto-restart nil
-  "When non-nil, auto-restart stale native adapter on repeated bridge disconnects."
-  :type 'boolean
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-native-host-restart-threshold 8
-  "Consecutive bridge-not-connected errors before restarting native adapter."
-  :type 'integer
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-native-host-restart-cooldown 20.0
-  "Minimum seconds between automatic native adapter restart attempts."
-  :type 'number
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-native-host-restart-stall-seconds 12.0
-  "Require bridge to be stalled this many seconds before auto-restart."
-  :type 'number
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-native-host-pkill-pattern
-  "hyprland-zen-native-host .*hyprland-zen-bridge@0wd0"
-  "Pattern passed to `pkill -f' for stale browser-launched native adapters."
-  :type 'string
-  :group 'hyprland-zen)
-
-(defcustom hyprland-zen-activate-confirm-timeout 1.4
-  "Seconds to wait for interactive activate-tab confirmation in local store."
-  :type 'number
   :group 'hyprland-zen)
 
 (defvar hyprland-zen--tabs (make-hash-table :test #'equal)
@@ -136,17 +81,9 @@ reduces noise while preserving actionable failures."
 (defvar hyprland-zen--fragment "")
 (defvar hyprland-zen--preview-tab-id nil)
 (defvar hyprland-zen--preview-candidates nil)
-(defvar hyprland-zen--retry-refresh-timer nil)
-(defvar hyprland-zen--bootstrap-timer nil)
-(defvar hyprland-zen--bootstrap-deadline nil)
 
 (defvar hyprland-zen--trace nil
   "Recent bridge protocol entries (newest first).")
-
-(defvar hyprland-zen--last-error-notify-signature nil)
-(defvar hyprland-zen--last-error-notify-at nil)
-(defvar hyprland-zen--bridge-not-connected-streak 0)
-(defvar hyprland-zen--last-native-host-restart-at nil)
 
 (defvar hyprland-zen--started-at nil)
 (defvar hyprland-zen--last-line-at nil)
@@ -308,36 +245,12 @@ Return non-nil when jump was dispatched."
 
 (defun hyprland-zen--wait-for-bridge (&optional timeout)
   "Wait for bridge connectivity and snapshots up to TIMEOUT seconds."
-  (let ((deadline (+ (hyprland-zen--now) (or timeout hyprland-zen-initial-sync-timeout)))
-        (next-refresh 0.0))
+  (let ((deadline (+ (hyprland-zen--now) (or timeout hyprland-zen-initial-sync-timeout))))
     (while (and (hyprland-zen-running-p)
                 (not hyprland-zen--bridge-connected)
                 (< (hyprland-zen--now) deadline))
-      (when (>= (hyprland-zen--now) next-refresh)
-        (ignore-errors
-          (hyprland-zen-refresh)
-          (hyprland-zen-refresh-workspaces))
-        (setq next-refresh (+ (hyprland-zen--now) 0.35)))
       (accept-process-output hyprland-zen--process 0.12))
     hyprland-zen--bridge-connected))
-
-(defun hyprland-zen--tab-active-p (tab-id)
-  "Return non-nil when TAB-ID exists and is marked active in local store."
-  (when-let* ((it (cl-find-if (lambda (entry)
-                                (string= (hyprland-zen--string (hyprland-zen--field entry 'tab_id))
-                                         (hyprland-zen--string tab-id)))
-                              (hyprland-zen-tabs))))
-    (hyprland-zen--truthy-p (hyprland-zen--field it 'active))))
-
-(defun hyprland-zen--wait-for-tab-active (tab-id &optional timeout)
-  "Wait up to TIMEOUT seconds until TAB-ID becomes active in local store."
-  (let ((deadline (+ (hyprland-zen--now) (or timeout hyprland-zen-activate-confirm-timeout)))
-        ok)
-    (while (and (not (setq ok (hyprland-zen--tab-active-p tab-id)))
-                (hyprland-zen-running-p)
-                (< (hyprland-zen--now) deadline))
-      (accept-process-output hyprland-zen--process 0.1))
-    ok))
 
 (defun hyprland-zen--preview-state (action cand)
   "Consult state callback for Zen tab preview.
@@ -418,16 +331,6 @@ ACTION and CAND follow Consult's :state contract."
        (or (string-match-p "browser-bridge-not-connected" message)
            (string-match-p "browser-bridge-disconnected" message))))
 
-(defun hyprland-zen--bridge-stalled-p ()
-  "Return non-nil when bridge has remained disconnected beyond warmup window."
-  (and (not hyprland-zen--bridge-connected)
-       (let ((stall (max 0.0 hyprland-zen-native-host-restart-stall-seconds))
-             (since-tabs (hyprland-zen--seconds-since hyprland-zen--last-snapshot-at))
-             (since-workspaces (hyprland-zen--seconds-since hyprland-zen--last-workspace-snapshot-at)))
-         (or (null hyprland-zen--last-snapshot-at)
-             (and since-tabs (>= since-tabs stall))
-             (and since-workspaces (>= since-workspaces stall))))))
-
 (defun hyprland-zen--clear-bridge-disconnect-error ()
   "Clear stale disconnect diagnostics when bridge has recovered."
   (when (and (stringp hyprland-zen--last-error-message)
@@ -435,28 +338,6 @@ ACTION and CAND follow Consult's :state contract."
                  (string-match-p "browser-bridge-disconnected" hyprland-zen--last-error-message)))
     (setq hyprland-zen--last-error-message nil
           hyprland-zen--last-error-op nil)))
-
-(defun hyprland-zen--maybe-restart-native-host (reason)
-  "Restart stale native adapter process when REASON repeats too often."
-  (when (and hyprland-zen-native-host-auto-restart
-             (>= hyprland-zen--bridge-not-connected-streak
-                 (max 1 hyprland-zen-native-host-restart-threshold))
-             (hyprland-zen--bridge-stalled-p)
-             (executable-find "pkill")
-             (> (length (string-trim hyprland-zen-native-host-pkill-pattern)) 0)
-             (let ((last (or hyprland-zen--last-native-host-restart-at 0.0)))
-               (>= (- (hyprland-zen--now) last)
-                   (max 0.0 hyprland-zen-native-host-restart-cooldown))))
-    (let ((exit-code (call-process "pkill" nil nil nil "-f" hyprland-zen-native-host-pkill-pattern)))
-      (setq hyprland-zen--last-native-host-restart-at (hyprland-zen--now)
-            hyprland-zen--bridge-not-connected-streak 0)
-      (hyprland-zen--trace-add
-       'native-restart
-       `((reason . ,reason)
-         (pkill-pattern . ,hyprland-zen-native-host-pkill-pattern)
-         (exit-code . ,(or exit-code -1))))
-      (hyprland--debug "zen native adapter restart requested (%s), pkill exit=%s"
-                       reason (or exit-code -1)))))
 
 (defun hyprland-zen--reset-runtime-metrics ()
   "Reset runtime counters and timestamps for diagnostics."
@@ -469,10 +350,6 @@ ACTION and CAND follow Consult's :state contract."
         hyprland-zen--last-preview-response-at nil
         hyprland-zen--last-error-message nil
         hyprland-zen--last-error-op nil
-        hyprland-zen--last-error-notify-signature nil
-        hyprland-zen--last-error-notify-at nil
-        hyprland-zen--bridge-not-connected-streak 0
-        hyprland-zen--last-native-host-restart-at nil
         hyprland-zen--last-sentinel-event nil
         hyprland-zen--bridge-connected nil
         hyprland-zen--bridge-last-reason nil
@@ -491,78 +368,6 @@ ACTION and CAND follow Consult's :state contract."
           hyprland-zen--trace)
     (when (> (length hyprland-zen--trace) hyprland-zen-trace-max-entries)
       (setcdr (nthcdr (1- hyprland-zen-trace-max-entries) hyprland-zen--trace) nil))))
-
-(defun hyprland-zen--cancel-bootstrap-retry ()
-  "Cancel ongoing bootstrap retry timer state."
-  (when (timerp hyprland-zen--bootstrap-timer)
-    (cancel-timer hyprland-zen--bootstrap-timer))
-  (setq hyprland-zen--bootstrap-timer nil
-        hyprland-zen--bootstrap-deadline nil))
-
-(defun hyprland-zen--bootstrap-ready-p ()
-  "Return non-nil when both tab and workspace stores are populated."
-  (and (hyprland-zen-tabs)
-       (hyprland-zen-workspaces)))
-
-(defun hyprland-zen--bootstrap-active-p ()
-  "Return non-nil when bootstrap retry window is currently active."
-  (and hyprland-zen--bootstrap-deadline
-       (> hyprland-zen--bootstrap-deadline (hyprland-zen--now))))
-
-(defun hyprland-zen--notify-error (op err-message)
-  "Echo runtime error for OP and ERR-MESSAGE with throttling."
-  (let* ((signature (format "%s|%s" op err-message))
-         (now (hyprland-zen--now))
-         (should-echo
-          (or (not (equal signature hyprland-zen--last-error-notify-signature))
-              (not hyprland-zen--last-error-notify-at)
-              (>= (- now hyprland-zen--last-error-notify-at)
-                  (max 0.0 hyprland-zen-error-notify-throttle-seconds)))))
-    (when should-echo
-      (setq hyprland-zen--last-error-notify-signature signature
-            hyprland-zen--last-error-notify-at now)
-      (message "hyprland-zen error (%s): %s" op err-message))))
-
-(defun hyprland-zen--bootstrap-retry-tick ()
-  "Retry tab/workspace refresh during startup warmup window."
-  (setq hyprland-zen--bootstrap-timer nil)
-  (unless (hyprland-zen-running-p)
-    (hyprland-zen--cancel-bootstrap-retry))
-  (when (and (hyprland-zen-running-p)
-             hyprland-zen--bootstrap-deadline
-             (< (hyprland-zen--now) hyprland-zen--bootstrap-deadline)
-             (not (hyprland-zen--bootstrap-ready-p)))
-    (ignore-errors
-      (hyprland-zen-refresh)
-      (hyprland-zen-refresh-workspaces))
-    (setq hyprland-zen--bootstrap-timer
-          (run-at-time
-           (max 0.2 hyprland-zen-bootstrap-retry-interval)
-           nil
-           #'hyprland-zen--bootstrap-retry-tick)))
-  (when (hyprland-zen--bootstrap-ready-p)
-    (hyprland-zen--cancel-bootstrap-retry)))
-
-(defun hyprland-zen--start-bootstrap-retry ()
-  "Start bounded startup retries for initial bridge synchronization."
-  (hyprland-zen--cancel-bootstrap-retry)
-  (setq hyprland-zen--bootstrap-deadline
-        (+ (hyprland-zen--now) (max 0.0 hyprland-zen-bootstrap-retry-seconds)))
-  (hyprland-zen--bootstrap-retry-tick))
-
-(defun hyprland-zen--schedule-retry-refresh ()
-  "Schedule a short delayed refresh after bridge-not-connected errors."
-  (when (timerp hyprland-zen--retry-refresh-timer)
-    (cancel-timer hyprland-zen--retry-refresh-timer))
-  (setq hyprland-zen--retry-refresh-timer
-        (run-at-time
-         0.8 nil
-         (lambda ()
-           (setq hyprland-zen--retry-refresh-timer nil)
-           (when (hyprland-zen-running-p)
-             (ignore-errors
-               (hyprland-zen-refresh)
-               (hyprland-zen-refresh-workspaces)))))))
 
 (defun hyprland-zen--ensure-tabs-ready ()
   "Ensure host is running and attempt to populate tab snapshot.
@@ -810,8 +615,6 @@ Active tabs are sorted first, then by title."
   (let ((type (hyprland-zen--message-type message)))
     (hyprland-zen--touch-line type)
     (hyprland-zen--trace-add 'in message)
-    (unless (string= type "error")
-      (setq hyprland-zen--bridge-not-connected-streak 0))
     (pcase type
       ("snapshot"
        (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
@@ -823,8 +626,6 @@ Active tabs are sorted first, then by title."
          (hyprland-zen--store-workspace workspace))
        (dolist (tab (or (hyprland-zen--field message 'tabs) nil))
          (hyprland-zen--store-tab tab))
-       (when (hyprland-zen--bootstrap-ready-p)
-         (hyprland-zen--cancel-bootstrap-retry))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
       ((or "workspace-snapshot" "workspace_snapshot")
@@ -834,8 +635,6 @@ Active tabs are sorted first, then by title."
        (clrhash hyprland-zen--workspaces)
        (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
          (hyprland-zen--store-workspace workspace))
-       (when (hyprland-zen--bootstrap-ready-p)
-         (hyprland-zen--cancel-bootstrap-retry))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
       ("upsert"
@@ -859,8 +658,7 @@ Active tabs are sorted first, then by title."
              hyprland-zen--bridge-last-reason
              (hyprland-zen--string (hyprland-zen--field message 'reason)))
        (when hyprland-zen--bridge-connected
-         (setq hyprland-zen--queued-op-count 0
-               hyprland-zen--bridge-not-connected-streak 0)
+         (setq hyprland-zen--queued-op-count 0)
          (hyprland-zen--clear-bridge-disconnect-error))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        t)
@@ -874,8 +672,6 @@ Active tabs are sorted first, then by title."
                  (1+ hyprland-zen--queued-op-count)))
        (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
          (hyprland-zen--record-error reason (hyprland-zen--field message 'op)))
-       (unless (hyprland-zen--bootstrap-active-p)
-         (hyprland-zen--start-bootstrap-retry))
        (run-hooks 'hyprland-zen-after-refresh-hook)
        nil)
       ("remove"
@@ -900,23 +696,8 @@ Active tabs are sorted first, then by title."
        (hyprland-zen--record-error
         (hyprland-zen--field message 'message)
         (hyprland-zen--field message 'op))
-       (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message)))
-                   (op-name (hyprland-zen--string (hyprland-zen--field message 'op))))
-         (when (or (string-match-p "browser-bridge-not-connected" reason)
-                   (string-match-p "browser-bridge-disconnected" reason))
-           (setq hyprland-zen--bridge-connected nil)
-           (when (member op-name '("list-tabs" "list-workspaces"))
-             (hyprland-zen--schedule-retry-refresh))
-           (cl-incf hyprland-zen--bridge-not-connected-streak)
-           (unless (hyprland-zen--bootstrap-active-p)
-             (hyprland-zen--start-bootstrap-retry))
-           (hyprland-zen--maybe-restart-native-host reason)))
-       (when-let* ((op (hyprland-zen--string (hyprland-zen--field message 'op)))
-                   (err-message (hyprland-zen--string (hyprland-zen--field message 'message))))
-         (when (and (member op '("activate-tab" "activate-workspace" "list-tabs" "list-workspaces"))
-                    (or (not (hyprland-zen--bridge-disconnect-message-p err-message))
-                        (member op hyprland-zen-notify-bridge-error-ops)))
-           (hyprland-zen--notify-error op err-message)))
+       (when (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message)
+         (setq hyprland-zen--bridge-connected nil))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
@@ -1015,7 +796,6 @@ Active tabs are sorted first, then by title."
       (when hyprland-zen-auto-refresh-on-start
         (hyprland-zen-refresh)
         (hyprland-zen-refresh-workspaces))
-      (hyprland-zen--start-bootstrap-retry)
       hyprland-zen--process)))
 
 (defun hyprland-zen-stop ()
@@ -1023,15 +803,11 @@ Active tabs are sorted first, then by title."
   (interactive)
   (when (process-live-p hyprland-zen--process)
     (delete-process hyprland-zen--process))
-  (when (timerp hyprland-zen--retry-refresh-timer)
-    (cancel-timer hyprland-zen--retry-refresh-timer))
-  (hyprland-zen--cancel-bootstrap-retry)
   (setq hyprland-zen--preview-tab-id nil)
   (setq hyprland-zen--preview-candidates nil)
   (hyprland-consult--cleanup-preview)
   (setq hyprland-zen--process nil
-        hyprland-zen--fragment ""
-        hyprland-zen--retry-refresh-timer nil))
+        hyprland-zen--fragment ""))
 
 (defun hyprland-zen-status ()
   "Return and optionally print current Zen bridge diagnostics.
@@ -1063,9 +839,6 @@ When called interactively, print a short status line in echo area."
                 :bridge-last-reason hyprland-zen--bridge-last-reason
                 :queued-op-count hyprland-zen--queued-op-count
                 :last-queued-op hyprland-zen--last-queued-op
-                :bootstrap-retry-seconds-left
-                (when hyprland-zen--bootstrap-deadline
-                  (max 0.0 (- hyprland-zen--bootstrap-deadline (hyprland-zen--now))))
                 :last-error-op hyprland-zen--last-error-op
                 :last-error-message hyprland-zen--last-error-message
                 :last-sentinel-event hyprland-zen--last-sentinel-event)))
@@ -1262,14 +1035,6 @@ When TAB is nil, prompt from current registry."
     (when window-id
       (hyprland-zen--jump-to-known-window window-id))
     (hyprland-zen--send payload)
-    (when (called-interactively-p 'interactive)
-      (unless (hyprland-zen--wait-for-tab-active tab-id hyprland-zen-activate-confirm-timeout)
-        (when (and (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message)
-                   (hyprland-zen--wait-for-bridge hyprland-zen-activate-confirm-timeout))
-          (hyprland-zen--send payload)
-          (hyprland-zen--wait-for-tab-active tab-id hyprland-zen-activate-confirm-timeout))
-        (unless (hyprland-zen--tab-active-p tab-id)
-          (user-error "activate-tab was not confirmed for tab %s (bridge/state may be stale)" tab-id))))
     (when window-id
       (hyprland-zen--schedule-window-address-refresh window-id))
     key))

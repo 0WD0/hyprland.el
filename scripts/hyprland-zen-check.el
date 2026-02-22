@@ -119,8 +119,7 @@
          (fatal nil)
          (ready nil)
          (exit-code 1))
-    (let ((hyprland-zen-error-notify-throttle-seconds 3600.0)
-          (inhibit-message t)
+    (let ((inhibit-message t)
           (message-log-max nil))
       (condition-case err
           (progn

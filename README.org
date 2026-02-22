@@ -186,8 +186,8 @@ Limitations from current Zen WebExtension surface:
 - Current mapping uses public fields (~windowId~, ~cookieStoreId~) and emits ~sync_group~ as a heuristic (~container:<cookieStoreId>~).
 
 If you still hit ~No Zen tabs available~, it usually means bridge is not connected yet.
-Current behavior retries connection and requests snapshots automatically, then surfaces
-an explicit bridge-not-ready error when timeout is reached. Use
+Current behavior performs one-shot refresh/wait during interactive actions, then
+surfaces an explicit bridge-not-ready error when timeout is reached. Use
 ~hyprland-zen-status~ to inspect live bridge state (running, in/out counters,
 last snapshot age, last error), and ~hyprland-zen-doctor~ for a one-shot
 refresh/readiness probe.
@@ -214,9 +214,6 @@ Important options:
 - ~hyprland-ibuffer-intercept-buffer-open~: redirect mirror-buffer open actions into ~hyprland-jump~
 - ~hyprland-zen-host-command~: command list used to launch Zen bridge process
 - ~hyprland-zen-auto-refresh-on-start~: request tab snapshot when bridge starts
-- ~hyprland-zen-bootstrap-retry-seconds~: startup warmup window for auto-retrying tab/workspace refresh
-- ~hyprland-zen-bootstrap-retry-interval~: retry interval during startup warmup
-- ~hyprland-zen-error-notify-throttle-seconds~: throttle identical Zen bridge error echo messages
 - ~hyprland-zen-trace-max-entries~: max in-memory bridge trace payload entries
 - ~hyprland-zen-preview-key~: Consult preview trigger for tab switch
 - ~hyprland-zen-jump-to-window-on-tab-switch~: best-effort Hyprland jump on tab activate
@@ -243,16 +240,15 @@ is fixed in current code.
 ** Zen bridge only works right after extension reload
 
 If tabs appear only immediately after reloading the extension, the bridge likely
-hit startup timing drift. Current ~hyprland-zen~ retries ~list-tabs~ / ~list-workspaces~
-for a bounded warmup window. You can inspect progress with:
+hit startup timing drift. Current ~hyprland-zen~ uses one-shot sync requests in
+interactive flows. You can inspect progress with:
 
-- ~M-x hyprland-zen-status~ (check ~:bootstrap-retry-seconds-left~, ~:last-error-message~)
+- ~M-x hyprland-zen-status~ (check ~:bridge-connected~, ~:last-error-message~)
 - ~M-x hyprland-zen-doctor~ (one-shot readiness probe)
 
 If you see repeated ~browser-bridge-not-connected~ logs and many outgoing
-~{"op":"list-tabs"}~ lines, it means Emacs bridge is sending retries while the
-browser extension is still not connected to native messaging. Current code keeps
-bootstrap retries bounded and throttles repeated echo logs.
+~{"op":"list-tabs"}~ lines, the browser extension is still not connected to
+native messaging.
 
 If this still persists, check native host socket path details from
 ~M-x hyprland-zen-trace-report~ (error messages include ~socket=...~) to detect
