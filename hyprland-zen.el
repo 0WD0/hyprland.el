@@ -73,6 +73,19 @@ Examples:
 (defvar hyprland-zen--fragment "")
 (defvar hyprland-zen--preview-tab-id nil)
 
+(defvar hyprland-zen--started-at nil)
+(defvar hyprland-zen--last-line-at nil)
+(defvar hyprland-zen--last-line-type nil)
+(defvar hyprland-zen--last-snapshot-at nil)
+(defvar hyprland-zen--last-workspace-snapshot-at nil)
+(defvar hyprland-zen--last-preview-request-at nil)
+(defvar hyprland-zen--last-preview-response-at nil)
+(defvar hyprland-zen--last-error-message nil)
+(defvar hyprland-zen--last-error-op nil)
+(defvar hyprland-zen--last-sentinel-event nil)
+(defvar hyprland-zen--messages-in 0)
+(defvar hyprland-zen--messages-out 0)
+
 (defvar hyprland-zen-after-refresh-hook nil
   "Hook run after Zen tab store changes.")
 
@@ -238,6 +251,41 @@ ACTION and CAND follow Consult's :state contract."
                 (< (float-time) deadline))
       (accept-process-output hyprland-zen--process 0.1))
     tabs))
+
+(defun hyprland-zen--now ()
+  "Return current timestamp as float seconds."
+  (float-time))
+
+(defun hyprland-zen--seconds-since (timestamp)
+  "Return elapsed seconds since TIMESTAMP, or nil."
+  (when timestamp
+    (max 0.0 (- (hyprland-zen--now) timestamp))))
+
+(defun hyprland-zen--touch-line (type)
+  "Record that host emitted message TYPE now."
+  (setq hyprland-zen--last-line-at (hyprland-zen--now)
+        hyprland-zen--last-line-type type)
+  (cl-incf hyprland-zen--messages-in))
+
+(defun hyprland-zen--record-error (message &optional op)
+  "Record latest host MESSAGE and OP for diagnostics."
+  (setq hyprland-zen--last-error-message (hyprland-zen--string message)
+        hyprland-zen--last-error-op (hyprland-zen--string op)))
+
+(defun hyprland-zen--reset-runtime-metrics ()
+  "Reset runtime counters and timestamps for diagnostics."
+  (setq hyprland-zen--started-at nil
+        hyprland-zen--last-line-at nil
+        hyprland-zen--last-line-type nil
+        hyprland-zen--last-snapshot-at nil
+        hyprland-zen--last-workspace-snapshot-at nil
+        hyprland-zen--last-preview-request-at nil
+        hyprland-zen--last-preview-response-at nil
+        hyprland-zen--last-error-message nil
+        hyprland-zen--last-error-op nil
+        hyprland-zen--last-sentinel-event nil
+        hyprland-zen--messages-in 0
+        hyprland-zen--messages-out 0))
 
 (defun hyprland-zen--ensure-tabs-ready ()
   "Ensure host is running and attempt to populate tab snapshot.
@@ -482,8 +530,11 @@ Active tabs are sorted first, then by title."
 
 (defun hyprland-zen--apply-message (message)
   "Apply parsed host MESSAGE to in-memory state."
-  (pcase (hyprland-zen--message-type message)
+  (let ((type (hyprland-zen--message-type message)))
+    (hyprland-zen--touch-line type)
+    (pcase type
     ("snapshot"
+     (setq hyprland-zen--last-snapshot-at hyprland-zen--last-line-at)
      (hyprland-zen--clear-store)
      (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
        (hyprland-zen--store-workspace workspace))
@@ -492,6 +543,7 @@ Active tabs are sorted first, then by title."
      (run-hooks 'hyprland-zen-after-refresh-hook)
      t)
     ((or "workspace-snapshot" "workspace_snapshot")
+     (setq hyprland-zen--last-workspace-snapshot-at hyprland-zen--last-line-at)
      (clrhash hyprland-zen--workspaces)
      (dolist (workspace (or (hyprland-zen--field message 'workspaces) nil))
        (hyprland-zen--store-workspace workspace))
@@ -524,22 +576,26 @@ Active tabs are sorted first, then by title."
        t))
     ("preview"
      (let ((tab-id (hyprland-zen--string (hyprland-zen--field message 'tab_id))))
-       (when (and hyprland-zen--preview-tab-id
-                  (string= tab-id hyprland-zen--preview-tab-id))
-         (hyprland-zen--display-preview-data-url
+       (setq hyprland-zen--last-preview-response-at hyprland-zen--last-line-at)
+        (when (and hyprland-zen--preview-tab-id
+                   (string= tab-id hyprland-zen--preview-tab-id))
+          (hyprland-zen--display-preview-data-url
           (hyprland-zen--string (hyprland-zen--field message 'image_data_url)))
          t)))
     ("error"
+     (hyprland-zen--record-error
+      (hyprland-zen--field message 'message)
+      (hyprland-zen--field message 'op))
      (when (and hyprland-zen--preview-tab-id
-                (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
-       (hyprland-zen--display-preview-message
+                 (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
+        (hyprland-zen--display-preview-message
         (hyprland-zen--string (hyprland-zen--field message 'message) "Tab preview unavailable")))
      (hyprland--debug "zen host error: %s"
                       (hyprland-zen--string (hyprland-zen--field message 'message) "unknown"))
      nil)
     (_
      (hyprland--debug "zen host unknown payload: %S" message)
-     nil)))
+     nil))))
 
 (defun hyprland-zen--parse-json (line)
   "Parse JSON LINE into Lisp object, returning nil on failure."
@@ -574,6 +630,7 @@ Active tabs are sorted first, then by title."
 (defun hyprland-zen--process-sentinel (proc event)
   "Handle Zen host PROC lifecycle EVENT."
   (hyprland--debug "zen host sentinel: %s" (string-trim event))
+  (setq hyprland-zen--last-sentinel-event (string-trim event))
   (unless (process-live-p proc)
     (setq hyprland-zen--process nil
           hyprland-zen--fragment "")))
@@ -586,6 +643,9 @@ Active tabs are sorted first, then by title."
   "Send JSON PAYLOAD to running host process."
   (unless (hyprland-zen-running-p)
     (user-error "hyprland-zen host is not running"))
+  (cl-incf hyprland-zen--messages-out)
+  (when (equal (hyprland-zen--field payload 'op) "capture-tab")
+    (setq hyprland-zen--last-preview-request-at (hyprland-zen--now)))
   (process-send-string hyprland-zen--process
                        (concat (json-encode payload) "\n")))
 
@@ -601,8 +661,10 @@ Active tabs are sorted first, then by title."
       (unless resolved
         (user-error "Unable to resolve `%s'; install browser/native-host/hyprland-zen-native-host or set `hyprland-zen-host-command'"
                     (car hyprland-zen-host-command)))
-      (setq hyprland-zen--fragment "")
-      (setq hyprland-zen--process
+       (setq hyprland-zen--fragment "")
+       (hyprland-zen--reset-runtime-metrics)
+       (setq hyprland-zen--started-at (hyprland-zen--now))
+       (setq hyprland-zen--process
             (make-process
              :name "hyprland-zen-bridge"
              :command resolved
@@ -627,6 +689,79 @@ Active tabs are sorted first, then by title."
   (setq hyprland-zen--process nil
         hyprland-zen--fragment ""))
 
+(defun hyprland-zen-status ()
+  "Return and optionally print current Zen bridge diagnostics.
+
+When called interactively, print a short status line in echo area."
+  (interactive)
+  (let* ((running (hyprland-zen-running-p))
+         (tab-count (hash-table-count hyprland-zen--tabs))
+         (workspace-count (hash-table-count hyprland-zen--workspaces))
+         (report
+          (list :running running
+                :pid (when running (process-id hyprland-zen--process))
+                :tab-count tab-count
+                :workspace-count workspace-count
+                :messages-in hyprland-zen--messages-in
+                :messages-out hyprland-zen--messages-out
+                :started-seconds-ago (hyprland-zen--seconds-since hyprland-zen--started-at)
+                :last-message-type hyprland-zen--last-line-type
+                :last-message-seconds-ago (hyprland-zen--seconds-since hyprland-zen--last-line-at)
+                :last-snapshot-seconds-ago (hyprland-zen--seconds-since hyprland-zen--last-snapshot-at)
+                :last-workspace-snapshot-seconds-ago
+                (hyprland-zen--seconds-since hyprland-zen--last-workspace-snapshot-at)
+                :last-preview-request-seconds-ago
+                (hyprland-zen--seconds-since hyprland-zen--last-preview-request-at)
+                :last-preview-response-seconds-ago
+                (hyprland-zen--seconds-since hyprland-zen--last-preview-response-at)
+                :last-error-op hyprland-zen--last-error-op
+                :last-error-message hyprland-zen--last-error-message
+                :last-sentinel-event hyprland-zen--last-sentinel-event)))
+    (when (called-interactively-p 'interactive)
+      (message
+       "Zen bridge: running=%s tabs=%d workspaces=%d in/out=%d/%d last=%s %.1fs ago err=%s"
+       (if running "yes" "no")
+       tab-count
+       workspace-count
+       hyprland-zen--messages-in
+       hyprland-zen--messages-out
+       (or hyprland-zen--last-line-type "none")
+       (or (hyprland-zen--seconds-since hyprland-zen--last-line-at) -1.0)
+       (or hyprland-zen--last-error-message "none")))
+    report))
+
+(defun hyprland-zen-doctor (&optional timeout)
+  "Run lightweight Zen bridge diagnosis and return report plist.
+
+TIMEOUT controls how long to wait for initial tab/workspace snapshots."
+  (interactive "P")
+  (let* ((wait-time (cond
+                     ((numberp timeout) timeout)
+                     ((and timeout (listp timeout)) (prefix-numeric-value timeout))
+                     (t hyprland-zen-initial-sync-timeout)))
+         (_ (unless (hyprland-zen-running-p)
+              (hyprland-zen-start)))
+         (_ (progn
+              (hyprland-zen-refresh)
+              (hyprland-zen-refresh-workspaces)))
+         (tabs (hyprland-zen--wait-for-tabs wait-time))
+         (spaces (hyprland-zen--ensure-workspaces-ready))
+         (status (hyprland-zen-status))
+         (report (append (list :wait-time wait-time
+                               :tabs-ready (and tabs t)
+                               :workspaces-ready (and spaces t))
+                         status)))
+    (when (called-interactively-p 'interactive)
+      (message
+       "Zen doctor: running=%s tabs=%d(%s) workspaces=%d(%s) last-error=%s"
+       (if (plist-get report :running) "yes" "no")
+       (or (plist-get report :tab-count) 0)
+       (if (plist-get report :tabs-ready) "ready" "empty")
+       (or (plist-get report :workspace-count) 0)
+       (if (plist-get report :workspaces-ready) "ready" "empty")
+       (or (plist-get report :last-error-message) "none")))
+    report))
+
 (defun hyprland-zen-refresh ()
   "Request full tab snapshot from Zen host."
   (interactive)
@@ -650,7 +785,8 @@ Active tabs are sorted first, then by title."
                           (cons (hyprland-zen--tab-label tab) tab))
                         tabs)))
     (unless cands
-      (user-error "No Zen tabs available (bridge disconnected or extension not ready)"))
+      (user-error
+       "No Zen tabs available (bridge disconnected or extension not ready). Check `M-x hyprland-zen-status' / `M-x hyprland-zen-doctor'"))
     (if (and (fboundp 'consult--read)
              (fboundp 'consult--lookup-cdr))
         (consult--read cands
@@ -669,7 +805,8 @@ Active tabs are sorted first, then by title."
                           (cons (hyprland-zen--workspace-label workspace) workspace))
                         workspaces)))
     (unless cands
-      (user-error "No Zen workspaces available (bridge disconnected or extension not ready)"))
+      (user-error
+       "No Zen workspaces available (bridge disconnected or extension not ready). Check `M-x hyprland-zen-status' / `M-x hyprland-zen-doctor'"))
     (cdr (assoc (completing-read prompt cands nil t) cands))))
 
 (defun hyprland-zen-tab-switch (&optional tab)

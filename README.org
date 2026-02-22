@@ -155,6 +155,8 @@ Use tab commands:
 - ~M-x hyprland-zen-tab-close~ (close selected tab)
 - ~M-x hyprland-zen-workspace-switch~ (activate selected workspace)
 - ~M-x hyprland-zen-open-url~ (open URL in Zen)
+- ~M-x hyprland-zen-status~ (show bridge runtime counters/timestamps and last error)
+- ~M-x hyprland-zen-doctor~ (force refresh + wait window, report tabs/workspaces readiness)
 
 Tab switch now supports preview during candidate navigation:
 
@@ -177,7 +179,10 @@ Limitations from current Zen WebExtension surface:
 
 If you still hit ~No Zen tabs available~, it usually means bridge is not connected yet.
 Current behavior retries connection and requests snapshots automatically, then surfaces
-an explicit bridge-not-ready error when timeout is reached.
+an explicit bridge-not-ready error when timeout is reached. Use
+~hyprland-zen-status~ to inspect live bridge state (running, in/out counters,
+last snapshot age, last error), and ~hyprland-zen-doctor~ for a one-shot
+refresh/readiness probe.
 
 * Customization
 
