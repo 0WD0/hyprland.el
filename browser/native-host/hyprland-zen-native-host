@@ -153,6 +153,19 @@ class NativeAdapter:
                 return
             self.pending_lines.pop(0)
 
+    def ensure_socket_alive(self) -> None:
+        if self.sock is None:
+            return
+        try:
+            probe = self.sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+        except BlockingIOError:
+            return
+        except OSError:
+            self.close_socket()
+            return
+        if probe == b"":
+            self.close_socket()
+
     def process_native_stdin(self, data: bytes) -> bool:
         if not data:
             return False
@@ -198,6 +211,7 @@ class NativeAdapter:
         try:
             while True:
                 self.try_connect_socket()
+                self.ensure_socket_alive()
                 events = self.selector.select(timeout=0.25)
                 if not events:
                     self.flush_pending()
