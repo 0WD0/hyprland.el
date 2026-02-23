@@ -1,7 +1,5 @@
 #+title: hyprland.el
 
-* hyprland.el
-
 ~hyprland.el~ brings Hyprland window management into Emacs.
 
 - Snapshot + socket2 sync for Hyprland windows
@@ -27,17 +25,17 @@ Current version: ~0.1.0~ (early but usable).
 
 * Installation
 
-** Local load-path (quick start)
-
 #+begin_src emacs-lisp
-(add-to-list 'load-path "/home/_WD_/Dev/hyprland.el")
-(require 'hyprland)
-#+end_src
+;; Doom Emacs (packages.el)
+(package! hyprland :recipe (:host github :repo "0WD0/hyprland.el"))
 
-** Eask dependencies
+;; use-package + straight.el
+(use-package hyprland
+  :straight (:host github :repo "0WD0/hyprland.el"))
 
-#+begin_src bash
-eask install-deps
+;; use-package + package-vc (Emacs 29+)
+(use-package hyprland
+  :vc (:url "https://github.com/0WD0/hyprland.el"))
 #+end_src
 
 * Basic usage
@@ -60,7 +58,7 @@ Core commands:
 - ~M-x hyprland-zen-workspace-switch~: choose and activate a Zen workspace
 - ~M-x hyprland-sync-stop~: stop socket/timers
 
-* Toplevel helper (recommended)
+* Hyprland snapshot helper (recommended)
 
 Build helper with ~hyprwayland-scanner~:
 
