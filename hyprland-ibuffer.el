@@ -37,7 +37,7 @@
 (defcustom hyprland-ibuffer-saved-filter-group-profile "hyprland"
   "Name of `ibuffer-saved-filter-groups' profile managed by Hyprland helpers.
 
-This profile is used by `hyprland-ibuffer-open-native'."
+This profile is used by `hyprland-ibuffer-open'."
   :type 'string
   :group 'hyprland-ibuffer)
 
@@ -189,24 +189,26 @@ This applies to `switch-to-buffer' and `pop-to-buffer' while
 
 (defun hyprland-ibuffer--advice-switch-to-buffer (orig buffer-or-name &rest args)
   "Redirect `switch-to-buffer' when BUFFER-OR-NAME is mirror buffer."
-  (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
-    (if (and hyprland-ibuffer-intercept-buffer-open
-             buf
-             (if (hyprland-ibuffer--preview-context-active-p)
-                 (hyprland-ibuffer--preview-buffer-window buf)
-               (hyprland-ibuffer--maybe-jump-for-buffer buf)))
-        (current-buffer)
-      (apply orig buffer-or-name args))))
+  (apply #'hyprland-ibuffer--advice-buffer-open
+         orig buffer-or-name #'current-buffer args))
 
 (defun hyprland-ibuffer--advice-pop-to-buffer (orig buffer-or-name &rest args)
   "Redirect `pop-to-buffer' when BUFFER-OR-NAME is mirror buffer."
+  (apply #'hyprland-ibuffer--advice-buffer-open
+         orig buffer-or-name #'selected-window args))
+
+(defun hyprland-ibuffer--advice-buffer-open (orig buffer-or-name handled-result-fn &rest args)
+  "Shared open redirection logic for mirror buffers.
+
+ORIG is original command, BUFFER-OR-NAME and ARGS are forwarded when not
+handled. HANDLED-RESULT-FN produces the return value for handled requests."
   (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
     (if (and hyprland-ibuffer-intercept-buffer-open
              buf
              (if (hyprland-ibuffer--preview-context-active-p)
                  (hyprland-ibuffer--preview-buffer-window buf)
                (hyprland-ibuffer--maybe-jump-for-buffer buf)))
-        (selected-window)
+        (funcall handled-result-fn)
       (apply orig buffer-or-name args))))
 
 (defun hyprland-ibuffer--on-mirror-buffer-kill ()
@@ -374,11 +376,6 @@ This command relies on `ibuffer-saved-filter-groups' and
       (hyprland-ibuffer--apply-formats)
       (hyprland-ibuffer-view-mode 1)
       (ibuffer-update nil t))))
-
-(defun hyprland-ibuffer-open-native ()
-  "Backward-compatible alias for `hyprland-ibuffer-open'."
-  (interactive)
-  (hyprland-ibuffer-open))
 
 (defun hyprland-ibuffer--mirror-buffer-at-point ()
   "Return Hyprland mirror buffer represented by current ibuffer row."

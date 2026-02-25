@@ -405,13 +405,6 @@
         (should (equal (cadr hypr)
                        '(mode . hyprland-window-buffer-mode)))))))
 
-(ert-deftest hyprland-ibuffer-test-open-native/switches-saved-profile ()
-  (let (called)
-    (cl-letf (((symbol-function 'hyprland-ibuffer-open)
-               (lambda () (setq called t))))
-      (hyprland-ibuffer-open-native)
-      (should called))))
-
 (ert-deftest hyprland-ibuffer-test-doctor/prunes-and-repairs-profile ()
   (let ((hyprland-ibuffer--address->buffer (make-hash-table :test #'equal))
         (ibuffer-saved-filter-groups nil)
