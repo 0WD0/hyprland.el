@@ -89,10 +89,7 @@ When using `consult--lookup-cdr', CAND is a Hyprland window alist."
          (hyprland-preview-ui-display
           (list :ok nil :message "Preview metadata missing for candidate")
           hyprland-consult-preview-display))))
-    ('exit
-     (hyprland-preview-cancel)
-     (hyprland-preview-ui-cleanup))
-    ('return
+    ((or 'exit 'return)
      (hyprland-preview-cancel)
      (hyprland-preview-ui-cleanup))))
 

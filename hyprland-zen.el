@@ -524,16 +524,7 @@ ACTION and CAND follow Consult's :state contract."
     ('preview
      (if (not cand)
          (hyprland-zen--display-preview-message "No tab candidate")
-       (let* ((tab (cond
-                    ((and (listp cand) (hyprland-zen--field cand 'tab_id))
-                     cand)
-                    ((and (stringp cand)
-                          (fboundp 'consult--lookup-cdr)
-                          hyprland-zen--preview-candidates)
-                     (consult--lookup-cdr cand hyprland-zen--preview-candidates nil))
-                    ((and (stringp cand) hyprland-zen--preview-candidates)
-                     (cdr (assoc cand hyprland-zen--preview-candidates)))
-                    (t nil)))
+       (let* ((tab (hyprland-zen--resolve-selection cand hyprland-zen--preview-candidates 'tab_id))
               (tab-id (hyprland-zen--string (hyprland-zen--field tab 'tab_id)))
               (url (hyprland-zen--string (hyprland-zen--field tab 'url))))
          (if (string-empty-p tab-id)
@@ -1345,22 +1336,19 @@ different completion frontends/versions. CANDIDATES is the original
        "No Zen tabs available (bridge=%s reason=%s). Check `M-x hyprland-zen-status' / `M-x hyprland-zen-doctor'"
        (if hyprland-zen--bridge-connected "connected" "disconnected")
        (or hyprland-zen--bridge-last-reason "none")))
-    (if (and (fboundp 'consult--read)
-             (fboundp 'consult--lookup-cdr))
-        (let ((hyprland-zen--preview-candidates cands))
-          (let* ((selected
-                  (consult--read cands
-                                 :prompt prompt
-                                 :require-match t
-                                 :sort nil
-                                 :lookup #'consult--lookup-cdr
-                                 :preview-key hyprland-zen-preview-key
-                                 :state #'hyprland-zen--preview-state))
-                 (tab (hyprland-zen--resolve-selection selected cands 'tab_id)))
-            (unless tab
-              (user-error "Selected Zen tab metadata is unavailable; run `M-x hyprland-zen-refresh'"))
-            tab))
-      (cdr (assoc (completing-read prompt cands nil t) cands)))))
+    (let ((hyprland-zen--preview-candidates cands))
+      (let* ((selected
+              (consult--read cands
+                             :prompt prompt
+                             :require-match t
+                             :sort nil
+                             :lookup #'consult--lookup-cdr
+                             :preview-key hyprland-zen-preview-key
+                             :state #'hyprland-zen--preview-state))
+             (tab (hyprland-zen--resolve-selection selected cands 'tab_id)))
+        (unless tab
+          (user-error "Selected Zen tab metadata is unavailable; run `M-x hyprland-zen-refresh'"))
+        tab))))
 
 (defun hyprland-zen--read-workspace (prompt)
   "Read workspace from completion list using PROMPT."
