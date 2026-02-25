@@ -97,22 +97,22 @@ return action both receive the same structured value."
                            (plist-get payload :png-bytes)))
                 (image-type (or (plist-get payload :image-type) 'png))
                 (fingerprint (hyprland-consult--image-fingerprint bytes image-type)))
-            (condition-case err
-                (if (and bytes
-                         (display-images-p)
-                         (image-type-available-p image-type)
-                         (hyprland-consult--valid-image-bytes-p bytes image-type)
-                         (not (and fingerprint
-                                   (gethash fingerprint hyprland-consult--failed-image-fingerprints))))
-                    (progn
-                      (set-buffer-multibyte nil)
-                      (insert-image (create-image bytes image-type t :scale 0.45))
-                      (insert "\n"))
-                  (insert "Preview image unavailable in current Emacs display\n"))
-              (error
-               (when fingerprint
-                 (puthash fingerprint t hyprland-consult--failed-image-fingerprints))
-               (insert (format "Preview render error: %s\n" (error-message-string err)))))))
+           (condition-case err
+               (if (and bytes
+                        (display-images-p)
+                        (image-type-available-p image-type)
+                        (hyprland-consult--valid-image-bytes-p bytes image-type)
+                        (not (and fingerprint
+                                  (gethash fingerprint hyprland-consult--failed-image-fingerprints))))
+                   (progn
+                     (set-buffer-multibyte nil)
+                     (insert-image (create-image bytes image-type t :scale 0.45))
+                     (insert "\n"))
+                 (insert "Preview image unavailable in current Emacs display\n"))
+             (error
+              (when fingerprint
+                (puthash fingerprint t hyprland-consult--failed-image-fingerprints))
+              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
         (_
          (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
       (setq buffer-read-only t))
