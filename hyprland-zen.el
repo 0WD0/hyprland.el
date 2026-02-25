@@ -75,6 +75,11 @@ Examples:
   :type 'sexp
   :group 'hyprland-zen)
 
+(defcustom hyprland-zen-preview-cache-ttl 3
+  "Maximum age of cached tab previews in seconds."
+  :type 'integer
+  :group 'hyprland-zen)
+
 (defcustom hyprland-zen-initial-sync-timeout 1.5
   "Seconds to wait for initial tab snapshot when local store is empty."
   :type 'number
@@ -111,6 +116,11 @@ diagnosis in real environments."
 (defvar hyprland-zen--fragment "")
 (defvar hyprland-zen--preview-tab-id nil)
 (defvar hyprland-zen--preview-candidates nil)
+(defvar hyprland-zen--preview-cache (make-hash-table :test #'equal))
+(defvar hyprland-zen--preview-request-url (make-hash-table :test #'equal))
+(defvar hyprland-zen--preview-inflight-tab-id nil)
+(defvar hyprland-zen--preview-pending-tab-id nil)
+(defvar hyprland-zen--preview-pending-url nil)
 
 (defvar hyprland-zen--trace nil
   "Recent bridge protocol entries (newest first).")
@@ -417,6 +427,77 @@ title used as keyword2."
              :image-type (plist-get decoded :type)))
     (hyprland-zen--display-preview-message "Tab preview decode failed")))
 
+(defun hyprland-zen--preview-cache-get (tab-id url)
+  "Return cached DATA-URL for TAB-ID and URL when still fresh."
+  (when-let* ((entry (gethash tab-id hyprland-zen--preview-cache))
+              (ts (plist-get entry :ts))
+              (cached-url (or (plist-get entry :url) ""))
+              (data-url (plist-get entry :image-data-url)))
+    (if (and (string= cached-url (or url ""))
+             (<= (- (hyprland-zen--now) ts) hyprland-zen-preview-cache-ttl))
+        data-url
+      (remhash tab-id hyprland-zen--preview-cache)
+      nil)))
+
+(defun hyprland-zen--preview-cache-put (tab-id url data-url)
+  "Store preview DATA-URL for TAB-ID and URL in short-lived cache."
+  (when (and (stringp tab-id)
+             (not (string-empty-p tab-id))
+             (stringp data-url)
+             (not (string-empty-p data-url)))
+    (puthash tab-id
+             (list :ts (hyprland-zen--now)
+                   :url (or url "")
+                   :image-data-url data-url)
+             hyprland-zen--preview-cache)))
+
+(defun hyprland-zen--reset-preview-flow-state ()
+  "Reset ephemeral preview request state used by completion preview."
+  (setq hyprland-zen--preview-tab-id nil
+        hyprland-zen--preview-candidates nil
+        hyprland-zen--preview-inflight-tab-id nil
+        hyprland-zen--preview-pending-tab-id nil
+        hyprland-zen--preview-pending-url nil)
+  (clrhash hyprland-zen--preview-request-url))
+
+(defun hyprland-zen--drain-preview-request-queue ()
+  "Send newest queued preview request when no capture is in flight."
+  (when (and (null hyprland-zen--preview-inflight-tab-id)
+             (stringp hyprland-zen--preview-pending-tab-id)
+             (not (string-empty-p hyprland-zen--preview-pending-tab-id)))
+    (let ((tab-id hyprland-zen--preview-pending-tab-id)
+          (url (or hyprland-zen--preview-pending-url "")))
+      (setq hyprland-zen--preview-pending-tab-id nil
+            hyprland-zen--preview-pending-url nil)
+      (setq hyprland-zen--preview-inflight-tab-id tab-id)
+      (puthash tab-id url hyprland-zen--preview-request-url)
+      (condition-case err
+          (hyprland-zen--send `((op . "capture-tab")
+                                (tab_id . ,tab-id)))
+        (error
+         (setq hyprland-zen--preview-inflight-tab-id nil)
+         (when (and (string= tab-id (or hyprland-zen--preview-tab-id ""))
+                    (not (string-empty-p (or hyprland-zen--preview-tab-id ""))))
+           (hyprland-zen--display-preview-message
+            (format "Preview request failed: %s" (error-message-string err))))
+         (hyprland-zen--drain-preview-request-queue))))))
+
+(defun hyprland-zen--enqueue-preview-request (tab-id url)
+  "Schedule preview capture for TAB-ID and URL.
+
+Only one request is in flight; when busy, keep the latest request only."
+  (cond
+   ((and (stringp hyprland-zen--preview-inflight-tab-id)
+         (string= hyprland-zen--preview-inflight-tab-id tab-id))
+    nil)
+   (hyprland-zen--preview-inflight-tab-id
+    (setq hyprland-zen--preview-pending-tab-id tab-id
+          hyprland-zen--preview-pending-url (or url "")))
+   (t
+    (setq hyprland-zen--preview-pending-tab-id tab-id
+          hyprland-zen--preview-pending-url (or url ""))
+    (hyprland-zen--drain-preview-request-queue))))
+
 (defun hyprland-zen--capturable-url-p (url)
   "Return non-nil when URL is likely capturable via browser screenshot APIs."
   (let ((u (hyprland-zen--string url)))
@@ -461,22 +542,11 @@ ACTION and CAND follow Consult's :state contract."
                (hyprland-zen--display-preview-message
                 (format "Preview unavailable for this page type: %s" (if (string-empty-p url) "<unknown>" url)))
              (setq hyprland-zen--preview-tab-id tab-id)
-             (hyprland-zen--display-preview-message "Loading tab preview...")
-             (if (or hyprland-zen--bridge-connected
-                     (not (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message))
-                     (hyprland-zen--wait-for-bridge 0.9))
-                 (condition-case err
-                     (hyprland-zen--send-with-queued-retry
-                      `((op . "capture-tab")
-                        (tab_id . ,tab-id))
-                      1.2)
-                   (error
-                    (hyprland-zen--display-preview-message
-                     (format "Preview request failed: %s" (error-message-string err)))))
-               (hyprland-zen--display-preview-message "Bridge reconnecting; preview deferred")))))))
+             (if-let* ((cached (hyprland-zen--preview-cache-get tab-id url)))
+                 (hyprland-zen--display-preview-data-url cached)
+               (hyprland-zen--enqueue-preview-request tab-id url)))))))
     ((or 'exit 'return)
-     (setq hyprland-zen--preview-tab-id nil)
-     (setq hyprland-zen--preview-candidates nil)
+     (hyprland-zen--reset-preview-flow-state)
      (hyprland-preview-ui-cleanup))))
 
 (defun hyprland-zen--wait-for-tabs (&optional timeout)
@@ -852,12 +922,8 @@ Active tabs are sorted first, then by title."
              (hyprland-zen--string (hyprland-zen--field message 'reason)))
        (when hyprland-zen--bridge-connected
          (setq hyprland-zen--queued-op-count 0)
-         (hyprland-zen--clear-bridge-disconnect-error))
-       (when (and hyprland-zen--bridge-connected
-                  hyprland-zen--preview-tab-id
-                  (string= (or hyprland-zen--last-queued-op "") "capture-tab"))
-         (hyprland-zen--send `((op . "capture-tab")
-                               (tab_id . ,hyprland-zen--preview-tab-id))))
+         (hyprland-zen--clear-bridge-disconnect-error)
+         (hyprland-zen--drain-preview-request-queue))
        (when (and hyprland-zen--bridge-connected
                   (hyprland-zen-running-p)
                   (or (= (hash-table-count hyprland-zen--tabs) 0)
@@ -877,6 +943,14 @@ Active tabs are sorted first, then by title."
                            (hyprland-zen--field message 'queue_length))
                       (1+ hyprland-zen--queued-op-count))))
        (cl-incf hyprland-zen--queued-event-serial)
+       (when (and (string= hyprland-zen--last-queued-op "capture-tab")
+                  (stringp hyprland-zen--preview-inflight-tab-id)
+                  (not (string-empty-p hyprland-zen--preview-inflight-tab-id)))
+         (let* ((tab-id hyprland-zen--preview-inflight-tab-id)
+                (url (gethash tab-id hyprland-zen--preview-request-url "")))
+           (setq hyprland-zen--preview-inflight-tab-id nil
+                 hyprland-zen--preview-pending-tab-id tab-id
+                 hyprland-zen--preview-pending-url (or url ""))))
        (when-let* ((reason (hyprland-zen--string (hyprland-zen--field message 'message))))
          (hyprland-zen--record-error reason (hyprland-zen--field message 'op)))
        (run-hooks 'hyprland-zen-after-refresh-hook)
@@ -894,6 +968,13 @@ Active tabs are sorted first, then by title."
       ("preview"
        (let ((tab-id (hyprland-zen--string (hyprland-zen--field message 'tab_id))))
          (setq hyprland-zen--last-preview-response-at hyprland-zen--last-line-at)
+         (when (and (stringp hyprland-zen--preview-inflight-tab-id)
+                    (string= tab-id hyprland-zen--preview-inflight-tab-id))
+           (setq hyprland-zen--preview-inflight-tab-id nil))
+         (when-let* ((data-url (hyprland-zen--string (hyprland-zen--field message 'image_data_url))))
+           (hyprland-zen--preview-cache-put tab-id (gethash tab-id hyprland-zen--preview-request-url "") data-url)
+           (remhash tab-id hyprland-zen--preview-request-url))
+         (hyprland-zen--drain-preview-request-queue)
          (when (and hyprland-zen--preview-tab-id
                     (string= tab-id hyprland-zen--preview-tab-id))
            (hyprland-zen--display-preview-data-url
@@ -905,6 +986,9 @@ Active tabs are sorted first, then by title."
         (hyprland-zen--field message 'op))
        (when (hyprland-zen--bridge-disconnect-message-p hyprland-zen--last-error-message)
          (setq hyprland-zen--bridge-connected nil))
+       (when (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab")
+         (setq hyprland-zen--preview-inflight-tab-id nil)
+         (hyprland-zen--drain-preview-request-queue))
        (when (and hyprland-zen--preview-tab-id
                   (string= (hyprland-zen--string (hyprland-zen--field message 'op)) "capture-tab"))
          (hyprland-zen--display-preview-message
@@ -957,6 +1041,7 @@ Active tabs are sorted first, then by title."
   (hyprland-zen--trace-add 'sentinel (string-trim event))
   (setq hyprland-zen--last-sentinel-event (string-trim event))
   (unless (process-live-p proc)
+    (hyprland-zen--reset-preview-flow-state)
     (setq hyprland-zen--process nil
           hyprland-zen--fragment ""
           hyprland-zen--bridge-connected nil
@@ -1073,8 +1158,7 @@ Active tabs are sorted first, then by title."
   (interactive)
   (when (process-live-p hyprland-zen--process)
     (delete-process hyprland-zen--process))
-  (setq hyprland-zen--preview-tab-id nil)
-  (setq hyprland-zen--preview-candidates nil)
+  (hyprland-zen--reset-preview-flow-state)
   (hyprland-preview-ui-cleanup)
   (setq hyprland-zen--process nil
         hyprland-zen--fragment ""))
