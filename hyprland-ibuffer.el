@@ -14,12 +14,10 @@
 (require 'ibuffer)
 (require 'hyprland-sync)
 (require 'hyprland-preview)
+(require 'hyprland-preview-ui)
 
 (declare-function ibuffer-switch-to-saved-filter-groups "ibuf-ext" (name))
-(declare-function hyprland-consult--display-preview "hyprland-consult" (payload))
-(declare-function hyprland-consult--cleanup-preview "hyprland-consult" ())
 (defvar ibuffer-saved-filter-groups)
-(defvar consult--preview-function)
 
 (defgroup hyprland-ibuffer nil
   "Ibuffer integration for hyprland.el."
@@ -163,18 +161,14 @@ This applies to `switch-to-buffer' and `pop-to-buffer' while
     (hyprland-jump address)
     t))
 
-(defun hyprland-ibuffer--consult-preview-active-p ()
-  "Return non-nil when a Consult minibuffer preview loop is active."
-  (when-let* ((mini (active-minibuffer-window)))
-    (with-current-buffer (window-buffer mini)
-      (and (boundp 'consult--preview-function)
-           consult--preview-function))))
+(defun hyprland-ibuffer--preview-context-active-p ()
+  "Return non-nil when a registered completion preview context is active."
+  (hyprland-preview-ui-preview-context-p))
 
 (defun hyprland-ibuffer--cleanup-completion-preview ()
   "Cleanup preview resources after completion session exits."
   (hyprland-preview-cancel)
-  (when (fboundp 'hyprland-consult--cleanup-preview)
-    (hyprland-consult--cleanup-preview)))
+  (hyprland-preview-ui-cleanup))
 
 (defun hyprland-ibuffer--preview-buffer-window (buffer)
   "Render preview for Hyprland mirror BUFFER and return non-nil if handled."
@@ -187,8 +181,7 @@ This applies to `switch-to-buffer' and `pop-to-buffer' while
       (hyprland-preview-request
        window
        (lambda (payload)
-         (when (fboundp 'hyprland-consult--display-preview)
-           (hyprland-consult--display-preview payload))))
+         (hyprland-preview-ui-display payload)))
       (when-let* ((mini (active-minibuffer-window)))
         (with-current-buffer (window-buffer mini)
           (add-hook 'minibuffer-exit-hook #'hyprland-ibuffer--cleanup-completion-preview nil t)))
@@ -199,7 +192,7 @@ This applies to `switch-to-buffer' and `pop-to-buffer' while
   (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
     (if (and hyprland-ibuffer-intercept-buffer-open
              buf
-             (if (hyprland-ibuffer--consult-preview-active-p)
+             (if (hyprland-ibuffer--preview-context-active-p)
                  (hyprland-ibuffer--preview-buffer-window buf)
                (hyprland-ibuffer--maybe-jump-for-buffer buf)))
         (current-buffer)
@@ -210,7 +203,7 @@ This applies to `switch-to-buffer' and `pop-to-buffer' while
   (let ((buf (hyprland-ibuffer--resolve-buffer buffer-or-name)))
     (if (and hyprland-ibuffer-intercept-buffer-open
              buf
-             (if (hyprland-ibuffer--consult-preview-active-p)
+             (if (hyprland-ibuffer--preview-context-active-p)
                  (hyprland-ibuffer--preview-buffer-window buf)
                (hyprland-ibuffer--maybe-jump-for-buffer buf)))
         (selected-window)

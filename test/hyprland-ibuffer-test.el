@@ -179,7 +179,7 @@
           (with-current-buffer buf
             (hyprland-window-buffer-mode)
             (setq hyprland-window-address "0x555"))
-          (cl-letf (((symbol-function 'hyprland-ibuffer--consult-preview-active-p)
+          (cl-letf (((symbol-function 'hyprland-ibuffer--preview-context-active-p)
                      (lambda () t))
                     ((symbol-function 'hyprland-ibuffer--preview-buffer-window)
                      (lambda (_buf) (setq previewed t) t))
@@ -251,7 +251,7 @@
                      (lambda (window cb)
                        (setq requested-window window)
                        (funcall cb (list :ok nil :message "x"))))
-                    ((symbol-function 'hyprland-consult--display-preview)
+                    ((symbol-function 'hyprland-preview-ui-display)
                      (lambda (_payload) (setq displayed t))))
             (should (hyprland-ibuffer--preview-buffer-window buf))
             (should (equal (alist-get 'address requested-window) "0x666"))

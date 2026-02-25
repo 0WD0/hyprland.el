@@ -6,6 +6,7 @@
 
 (require 'ert)
 (require 'hyprland-consult)
+(require 'hyprland-preview-ui)
 
 (declare-function consult--lookup-cdr "consult" (selected candidates &rest _))
 
@@ -15,7 +16,7 @@
 
 (ert-deftest hyprland-consult-test-state/return-always-cleans-up ()
   (let (called cancelled)
-    (cl-letf (((symbol-function 'hyprland-consult--cleanup-preview)
+    (cl-letf (((symbol-function 'hyprland-preview-ui-cleanup)
                (lambda () (setq called t)))
               ((symbol-function 'hyprland-preview-cancel)
                (lambda () (setq cancelled t))))
@@ -25,7 +26,7 @@
 
 (ert-deftest hyprland-consult-test-state/preview-nil-keeps-existing-preview ()
   (let (called requested)
-    (cl-letf (((symbol-function 'hyprland-consult--cleanup-preview)
+    (cl-letf (((symbol-function 'hyprland-preview-ui-cleanup)
                (lambda () (setq called t)))
               ((symbol-function 'hyprland-preview-request)
                (lambda (&rest _) (setq requested t))))
@@ -36,7 +37,7 @@
 (ert-deftest hyprland-consult-test-state/preview-window-triggers-preview-request ()
   (let* ((window '((address . "0xabc")))
          seen-window)
-    (cl-letf (((symbol-function 'hyprland-consult--display-preview) #'ignore)
+    (cl-letf (((symbol-function 'hyprland-preview-ui-display) #'ignore)
               ((symbol-function 'hyprland-preview-request)
                (lambda (w _cb) (setq seen-window w))))
       (hyprland-consult--state 'preview window)
@@ -47,37 +48,37 @@
         called-current
         called-side)
     (unwind-protect
-        (cl-letf (((symbol-function 'hyprland-consult--render-preview-buffer)
+        (cl-letf (((symbol-function 'hyprland-preview-ui--render-preview-buffer)
                    #'ignore)
-                  ((symbol-function 'hyprland-consult--display-preview-current-window)
+                  ((symbol-function 'hyprland-preview-ui--display-current-window)
                    (lambda (_buffer)
                      (setq called-current t)
                      'current))
-                  ((symbol-function 'hyprland-consult--display-preview-side-window)
+                  ((symbol-function 'hyprland-preview-ui--display-side-window)
                    (lambda (_buffer)
                      (setq called-side t)
                      'side)))
-          (should (eq (hyprland-consult--display-preview '(:ok t)) 'current))
+          (should (eq (hyprland-preview-ui-display '(:ok t) hyprland-consult-preview-display) 'current))
           (should called-current)
           (should-not called-side))
-      (when-let* ((buf (get-buffer hyprland-consult--preview-buffer-name)))
+      (when-let* ((buf (get-buffer hyprland-preview-ui--buffer-name)))
         (kill-buffer buf)))))
 
 (ert-deftest hyprland-consult-test-display-preview/current-window-fallback-to-side ()
   (let ((hyprland-consult-preview-display 'current-window)
         called-side)
     (unwind-protect
-        (cl-letf (((symbol-function 'hyprland-consult--render-preview-buffer)
+        (cl-letf (((symbol-function 'hyprland-preview-ui--render-preview-buffer)
                    #'ignore)
-                  ((symbol-function 'hyprland-consult--display-preview-current-window)
+                  ((symbol-function 'hyprland-preview-ui--display-current-window)
                    (lambda (_buffer) nil))
-                  ((symbol-function 'hyprland-consult--display-preview-side-window)
+                  ((symbol-function 'hyprland-preview-ui--display-side-window)
                    (lambda (_buffer)
                      (setq called-side t)
                      'side)))
-          (should (eq (hyprland-consult--display-preview '(:ok t)) 'side))
+          (should (eq (hyprland-preview-ui-display '(:ok t) hyprland-consult-preview-display) 'side))
           (should called-side))
-      (when-let* ((buf (get-buffer hyprland-consult--preview-buffer-name)))
+      (when-let* ((buf (get-buffer hyprland-preview-ui--buffer-name)))
         (kill-buffer buf)))))
 
 (ert-deftest hyprland-consult-test-render-preview-buffer/uses-generic-image-fields ()
@@ -96,7 +97,7 @@
                    (lambda (_img)))
                   ((symbol-function 'image-mode)
                    #'ignore))
-          (hyprland-consult--render-preview-buffer
+          (hyprland-preview-ui--render-preview-buffer
            buf
            (list :ok t :image-bytes "x" :image-type 'jpeg))
           (should (eq inserted-type 'jpeg)))
@@ -120,7 +121,7 @@
             'ok
             (condition-case _err
                 (progn
-                  (hyprland-consult--render-preview-buffer
+                  (hyprland-preview-ui--render-preview-buffer
                    buf
                    (list :ok nil :message "updated"))
                   'ok)
@@ -138,21 +139,21 @@
           (set-window-buffer target origin)
           (setq start (window-start target)
                 point (window-point target))
-          (setq hyprland-consult--preview-window target
-                hyprland-consult--preview-restore (list origin start point))
+          (setq hyprland-preview-ui--window target
+                hyprland-preview-ui--restore (list origin start point))
           (set-window-buffer target preview)
-          (hyprland-consult--cleanup-preview)
+          (hyprland-preview-ui-cleanup)
           (should (eq (window-buffer target) origin))
           (should-not (buffer-live-p preview))
-          (should-not hyprland-consult--preview-window)
-          (should-not hyprland-consult--preview-restore))
+          (should-not hyprland-preview-ui--window)
+          (should-not hyprland-preview-ui--restore))
       (when (buffer-live-p origin)
         (kill-buffer origin)))))
 
 (ert-deftest hyprland-consult-test-state/preview-invalid-candidate-shows-message ()
   (let (payload)
-    (cl-letf (((symbol-function 'hyprland-consult--display-preview)
-               (lambda (p) (setq payload p))))
+    (cl-letf (((symbol-function 'hyprland-preview-ui-display)
+               (lambda (p &optional _display-policy) (setq payload p))))
       (hyprland-consult--state 'preview "label")
       (should payload)
       (should-not (plist-get payload :ok))
@@ -162,7 +163,7 @@
   (let (cancelled cleaned)
     (cl-letf (((symbol-function 'hyprland-preview-cancel)
                (lambda () (setq cancelled t)))
-              ((symbol-function 'hyprland-consult--cleanup-preview)
+              ((symbol-function 'hyprland-preview-ui-cleanup)
                (lambda () (setq cleaned t))))
       (hyprland-consult--state 'exit nil)
       (should cancelled)
