@@ -367,6 +367,11 @@ This command relies on `ibuffer-saved-filter-groups' and
 `ibuffer-switch-to-saved-filter-groups' from `ibuf-ext'."
   (interactive)
   (require 'ibuf-ext)
+  ;; Keep mirror buffers up to date so the Hyprland group is not empty
+  ;; when users open ibuffer before enabling mirror mode hooks.
+  (when (= 0 (hash-table-count hyprland-ibuffer--address->buffer))
+    (ignore-errors (hyprland-refresh)))
+  (hyprland-ibuffer-sync-buffers)
   (hyprland-ibuffer-install-saved-filter-group t)
   (ibuffer nil "*Ibuffer-hyprland*")
   (when-let* ((buf (get-buffer "*Ibuffer-hyprland*")))

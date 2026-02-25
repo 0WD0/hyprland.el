@@ -331,7 +331,8 @@
 
 (ert-deftest hyprland-ibuffer-test-open-applies-custom-formats ()
   (let ((ibuf (get-buffer-create "*Ibuffer-hyprland*"))
-        captured switched installed installed-quiet)
+        (hyprland-ibuffer--address->buffer (make-hash-table :test #'equal))
+        captured switched installed installed-quiet sync-called refresh-called)
     (unwind-protect
         (progn
           (with-current-buffer ibuf
@@ -348,6 +349,10 @@
                      (lambda (&optional quiet)
                        (setq installed t
                              installed-quiet quiet)))
+                    ((symbol-function 'hyprland-refresh)
+                     (lambda () (setq refresh-called t)))
+                    ((symbol-function 'hyprland-ibuffer-sync-buffers)
+                     (lambda () (setq sync-called t)))
                     ((symbol-function 'ibuffer-switch-to-saved-filter-groups)
                      (lambda (name) (setq switched name)))
                     ((symbol-function 'ibuffer-update) #'ignore))
@@ -355,6 +360,8 @@
             (should captured)
             (should installed)
             (should installed-quiet)
+            (should refresh-called)
+            (should sync-called)
             (should (equal switched hyprland-ibuffer-saved-filter-group-profile))
             (with-current-buffer ibuf
               (should hyprland-ibuffer-view-mode)
