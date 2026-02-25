@@ -26,11 +26,6 @@
   :type 'string
   :group 'hyprland)
 
-(defcustom hyprland-grim-executable "grim"
-  "Path to the grim executable."
-  :type 'string
-  :group 'hyprland)
-
 (defcustom hyprland-preview-sensitive-regexp nil
   "Regexp matching sensitive window titles/classes.
 
