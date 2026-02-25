@@ -11,8 +11,9 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'consult)
 (require 'hyprland-base)
-(require 'hyprland-consult)
+(require 'hyprland-preview-ui)
 
 (defgroup hyprland-zen nil
   "Zen browser integration for hyprland.el."
@@ -142,8 +143,6 @@ diagnosis in real environments."
   "Hook run after Zen tab store changes.")
 
 (declare-function hyprland-jump "hyprland-sync" (address))
-(declare-function hyprland-consult--display-preview "hyprland-consult" (payload))
-(declare-function hyprland-consult--cleanup-preview "hyprland-consult" ())
 (declare-function consult--read "consult" (candidates &rest options))
 (declare-function consult--lookup-cdr "consult" (selected candidates input &rest _))
 
@@ -406,13 +405,13 @@ title used as keyword2."
           (error nil))))))
 
 (defun hyprland-zen--display-preview-message (message)
-  "Display textual preview MESSAGE using shared Consult preview UI."
-  (hyprland-consult--display-preview (list :ok nil :message message)))
+  "Display textual preview MESSAGE using shared preview UI."
+  (hyprland-preview-ui-display (list :ok nil :message message)))
 
 (defun hyprland-zen--display-preview-data-url (data-url)
-  "Display image preview from DATA-URL using shared Consult preview UI."
+  "Display image preview from DATA-URL using shared preview UI."
   (if-let* ((decoded (hyprland-zen--decode-image-data-url data-url)))
-      (hyprland-consult--display-preview
+      (hyprland-preview-ui-display
        (list :ok t
              :image-bytes (plist-get decoded :bytes)
              :image-type (plist-get decoded :type)))
@@ -478,7 +477,7 @@ ACTION and CAND follow Consult's :state contract."
     ((or 'exit 'return)
      (setq hyprland-zen--preview-tab-id nil)
      (setq hyprland-zen--preview-candidates nil)
-     (hyprland-consult--cleanup-preview))))
+     (hyprland-preview-ui-cleanup))))
 
 (defun hyprland-zen--wait-for-tabs (&optional timeout)
   "Wait up to TIMEOUT seconds for tab store to populate, then return tabs list."
@@ -1076,7 +1075,7 @@ Active tabs are sorted first, then by title."
     (delete-process hyprland-zen--process))
   (setq hyprland-zen--preview-tab-id nil)
   (setq hyprland-zen--preview-candidates nil)
-  (hyprland-consult--cleanup-preview)
+  (hyprland-preview-ui-cleanup)
   (setq hyprland-zen--process nil
         hyprland-zen--fragment ""))
 

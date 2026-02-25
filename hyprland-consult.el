@@ -8,18 +8,14 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'subr-x)
 (require 'consult)
 (require 'hyprland-base)
 (require 'hyprland-sync)
 (require 'hyprland-preview)
+(require 'hyprland-preview-ui)
 
-(defvar hyprland-consult--preview-buffer-name " *hyprland-preview*")
-(defvar hyprland-consult--preview-window nil)
-(defvar hyprland-consult--preview-restore nil)
-(defvar hyprland-consult--failed-image-fingerprints (make-hash-table :test #'equal)
-  "Cache of image payload hashes that previously failed to render.")
+(defvar consult--preview-function)
 
 (defcustom hyprland-consult-preview-key '(:debounce 0.12 any)
   "Preview trigger configuration passed to `consult--read'.
@@ -54,26 +50,6 @@ Examples:
          (addr (or (alist-get 'address window) "?")))
     (format "[%s] %s (%s) <%s>" ws-name title class addr)))
 
-(defun hyprland-consult--bytes-prefix-p (bytes prefix)
-  "Return non-nil when BYTES starts with PREFIX integer list."
-  (and (stringp bytes)
-       (>= (length bytes) (length prefix))
-       (cl-loop for b in prefix
-                for i from 0
-                always (= (aref bytes i) b))))
-
-(defun hyprland-consult--valid-image-bytes-p (bytes image-type)
-  "Return non-nil when BYTES header matches IMAGE-TYPE format magic."
-  (pcase image-type
-    ('png (hyprland-consult--bytes-prefix-p bytes '(137 80 78 71 13 10 26 10)))
-    ('jpeg (hyprland-consult--bytes-prefix-p bytes '(255 216 255)))
-    (_ nil)))
-
-(defun hyprland-consult--image-fingerprint (bytes image-type)
-  "Build stable fingerprint string for BYTES and IMAGE-TYPE."
-  (when (and (stringp bytes) (symbolp image-type))
-    (format "%s:%s" image-type (secure-hash 'sha1 bytes))))
-
 (defun hyprland-consult--candidates ()
   "Build completion alist `(DISPLAY . WINDOW)' for selection.
 
@@ -83,110 +59,18 @@ return action both receive the same structured value."
             (cons (hyprland-consult--window-label window) window))
           (hyprland-windows)))
 
-(defun hyprland-consult--render-preview-buffer (buffer payload)
-  "Render PAYLOAD into preview BUFFER."
-  (with-current-buffer buffer
-    (let ((inhibit-read-only t)
-          (inhibit-modification-hooks t))
-      (setq buffer-read-only nil)
-      (goto-char (point-min))
-      (erase-buffer)
-      (pcase (plist-get payload :ok)
-        ('t
-         (let* ((bytes (or (plist-get payload :image-bytes)
-                           (plist-get payload :png-bytes)))
-                (image-type (or (plist-get payload :image-type) 'png))
-                (fingerprint (hyprland-consult--image-fingerprint bytes image-type)))
-           (condition-case err
-               (if (and bytes
-                        (display-images-p)
-                        (image-type-available-p image-type)
-                        (hyprland-consult--valid-image-bytes-p bytes image-type)
-                        (not (and fingerprint
-                                  (gethash fingerprint hyprland-consult--failed-image-fingerprints))))
-                   (progn
-                     (set-buffer-multibyte nil)
-                     (insert-image (create-image bytes image-type t :scale 0.45))
-                     (insert "\n"))
-                 (insert "Preview image unavailable in current Emacs display\n"))
-             (error
-              (when fingerprint
-                (puthash fingerprint t hyprland-consult--failed-image-fingerprints))
-              (insert (format "Preview render error: %s\n" (error-message-string err)))))))
-        (_
-         (insert (or (plist-get payload :message) "Preview unavailable") "\n")))
-      (setq buffer-read-only t))
-    (image-mode)))
+(defun hyprland-consult--preview-context-p ()
+  "Return non-nil when a Consult minibuffer preview loop is active."
+  (when-let* ((mini (active-minibuffer-window)))
+    (with-current-buffer (window-buffer mini)
+      (and (boundp 'consult--preview-function)
+           consult--preview-function))))
 
-(defun hyprland-consult--preview-base-window ()
-  "Return target window used for in-place preview."
-  (or (when-let* ((win (and (fboundp 'consult--original-window)
-                            (consult--original-window))))
-        (and (window-live-p win)
-             (not (window-minibuffer-p win))
-             win))
-      (when-let* ((win (minibuffer-selected-window)))
-        (and (window-live-p win)
-             (not (window-minibuffer-p win))
-             win))
-      (let ((win (selected-window)))
-        (and (window-live-p win)
-             (not (window-minibuffer-p win))
-             win))))
-
-(defun hyprland-consult--display-preview-side-window (buffer)
-  "Display preview BUFFER in a dedicated side window."
-  (display-buffer-in-side-window
-   buffer
-   '((side . right) (slot . 1) (window-width . 0.33))))
-
-(defun hyprland-consult--display-preview-current-window (buffer)
-  "Display preview BUFFER in the original completion window."
-  (when-let* ((win (or (and (window-live-p hyprland-consult--preview-window)
-                            hyprland-consult--preview-window)
-                       (hyprland-consult--preview-base-window))))
-    (unless (and (window-live-p hyprland-consult--preview-window)
-                 hyprland-consult--preview-restore)
-      (setq hyprland-consult--preview-window win
-            hyprland-consult--preview-restore
-            (list (window-buffer win)
-                  (window-start win)
-                  (window-point win))))
-    (condition-case nil
-        (progn
-          (set-window-buffer win buffer)
-          (set-window-point win (point-min))
-          win)
-      (error nil))))
-
-(defun hyprland-consult--display-preview (payload)
-  "Display preview PAYLOAD using configured display policy."
-  (let ((buffer (get-buffer-create hyprland-consult--preview-buffer-name)))
-    (hyprland-consult--render-preview-buffer buffer payload)
-    (or (and (eq hyprland-consult-preview-display 'current-window)
-             (hyprland-consult--display-preview-current-window buffer))
-        (hyprland-consult--display-preview-side-window buffer))))
-
-(defun hyprland-consult--cleanup-preview ()
-  "Close preview UI and restore previous window state."
-  (when-let* ((buf (get-buffer hyprland-consult--preview-buffer-name)))
-    (when (and (window-live-p hyprland-consult--preview-window)
-               hyprland-consult--preview-restore)
-      (pcase-let ((`(,orig ,start ,point) hyprland-consult--preview-restore))
-        (when (buffer-live-p orig)
-          (condition-case nil
-              (progn
-                (set-window-buffer hyprland-consult--preview-window orig)
-                (set-window-start hyprland-consult--preview-window start t)
-                (set-window-point hyprland-consult--preview-window point))
-            (error nil)))))
-    (dolist (win (get-buffer-window-list buf nil t))
-      (when (window-live-p win)
-        (quit-window nil win)))
-    (setq hyprland-consult--preview-window nil
-          hyprland-consult--preview-restore nil)
-    (clrhash hyprland-consult--failed-image-fingerprints)
-    (kill-buffer buf)))
+(unless (member #'hyprland-consult--preview-context-p
+                hyprland-preview-ui-preview-context-functions)
+  (setq hyprland-preview-ui-preview-context-functions
+        (append hyprland-preview-ui-preview-context-functions
+                (list #'hyprland-consult--preview-context-p))))
 
 (defun hyprland-consult--state (action cand)
   "Consult state callback for Hyprland preview.
@@ -201,15 +85,16 @@ When using `consult--lookup-cdr', CAND is a Hyprland window alist."
            (hyprland-preview-request
             cand
             (lambda (payload)
-              (hyprland-consult--display-preview payload)))
-         (hyprland-consult--display-preview
-          (list :ok nil :message "Preview metadata missing for candidate")))))
+              (hyprland-preview-ui-display payload hyprland-consult-preview-display)))
+         (hyprland-preview-ui-display
+          (list :ok nil :message "Preview metadata missing for candidate")
+          hyprland-consult-preview-display))))
     ('exit
      (hyprland-preview-cancel)
-     (hyprland-consult--cleanup-preview))
+     (hyprland-preview-ui-cleanup))
     ('return
      (hyprland-preview-cancel)
-     (hyprland-consult--cleanup-preview))))
+     (hyprland-preview-ui-cleanup))))
 
 (defun hyprland--select-window-candidate ()
   "Select a window candidate via Consult and return window object, or nil."
